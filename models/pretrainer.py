@@ -5,8 +5,8 @@ import random
 from typing import Optional, Tuple, Dict, List
 try:
     from .vit1d import ViT1D
-except:
-    from vit1d import ViT1D
+except ImportError:
+    ViT1D = None
 
 
 class MAEPretrainer(nn.Module):

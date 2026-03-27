@@ -18,13 +18,14 @@ from .baselines import (
 )
 from .mamba_blocks import MBA, ConvFeedForward, AffineDropPath, MaskMambaBlock, drop_path
 from .attention import (
-    AttentionHelper, AttLayer, AttModule, AttModule_mamba, 
-    AttModule_mamba_cls, GatedAttentionPoolingMIL,
+    AttentionHelper, AttLayer, AttModule, AttModule_mamba,
+    GatedAttentionPoolingMIL,
     MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 )
 from .components import FeatureExtractor, FeatureExtractorConv2d, FeatureExtractorForPretraining
 from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, latent_mixup, masked_avg_pool, create_mask
 from .encoder_decoder import (
+    MBA_encoder_decoder,
     MBA_tsm_encoder_decoder_ch_bottleneck,
     MBA_tsm_encoder_decoder_seq_bottleneck,
     MBA_tsm_encoder_decoder_progressive_with_skip_connection,
@@ -38,12 +39,9 @@ from .specialized import PatchTSTHead, PatchTSTNS, PredictHead, GASFFeatureExtra
 from .conv1d import Conv1DBlock, Conv1DTS
 
 try:
-    from ..net.vit1d import ViT1D
-except:
-    try:
-        from .net.vit1d import ViT1D
-    except:
-        ViT1D = None
+    from .vit1d import ViT1D
+except ImportError:
+    ViT1D = None
 
 def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretraining,  num_classes=1):
     """
@@ -529,25 +527,26 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                 num_encoder_layers += 1
             num_decoder_layers = max(1, num_MBA_blocks - num_encoder_layers)
 
-            net_type = best_params.get("net_type", "normal")
-            if net_type == "progressive_with_skip_connection":
-                net = MBA_tsm_encoder_decoder_progressive_with_skip_connection
-            elif net_type == "progressive":
-                net = MBA_tsm_encoder_decoder_progressive
-            elif net_type == "ch_bottleneck":
-                net = MBA_tsm_encoder_decoder_ch_bottleneck
-            elif net_type == "seq_bottleneck":
-                net = MBA_tsm_encoder_decoder_seq_bottleneck
-            else:
-                assert "net_type must be 'normal', 'progressive', or 'progressive_with_skip_connection' when using mba_encoder_decoder"
+            net_type = best_params.get("net_type", "progressive_skip")
+            # Map legacy net_type names to bottleneck_type parameter
+            bottleneck_map = {
+                "progressive_with_skip_connection": "progressive_skip",
+                "progressive": "progressive",
+                "ch_bottleneck": "channel",
+                "seq_bottleneck": "sequence",
+            }
+            bottleneck_type = bottleneck_map.get(net_type, net_type)
+            if bottleneck_type not in ("channel", "sequence", "progressive_skip", "progressive"):
+                raise ValueError(f"net_type must be one of {list(bottleneck_map.keys())} when using mba_encoder_decoder, got '{net_type}'")
 
-            model = net(input_tensor_size,
+            model = MBA_encoder_decoder(input_tensor_size,
+                            bottleneck_type=bottleneck_type,
                             num_encoder_layers=num_encoder_layers,
                             num_decoder_layers=num_decoder_layers,
-                            drop_path_rate =drop_path_rate,
+                            drop_path_rate=drop_path_rate,
                             kernel_size_mba=kernel_size_mba,
-                            dropout_rate=dropout_rate, 
-                            max_seq_len= max_seq_len,
+                            dropout_rate=dropout_rate,
+                            max_seq_len=max_seq_len,
                             cls_token=cls_token,
                             mba=MBA_encoder,
                             num_heads=num_heads,

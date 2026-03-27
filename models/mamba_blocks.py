@@ -33,17 +33,6 @@ class ConvFeedForward(nn.Module):
         out = self.activation(out)
         return out
 
-class ConvFeedForward_cls(nn.Module):
-    def __init__(self, dilation, in_channels, out_channels):
-        super(ConvFeedForward_cls, self).__init__() 
-        self.layer = nn.Sequential(
-            nn.Conv1d(in_channels, out_channels, 3, padding=dilation, dilation=dilation),
-            nn.ReLU()
-        )
-
-    def forward(self, x):
-        return self.layer(x)
-
 # The follow code is modified from
 # https://github.com/facebookresearch/SlowFast/blob/master/slowfast/models/common.py
 def drop_path(x, drop_prob=0.0, training=False):

@@ -10,12 +10,9 @@ from transformers import PatchTSTConfig, PatchTSTModel, ViTModel, ViTConfig, Swi
 
 
 try:
-    from ..net.vit1d import ViT1D
-except:
-    try:
-        from .net.vit1d import ViT1D
-    except:
-        ViT1D = None
+    from .vit1d import ViT1D
+except ImportError:
+    ViT1D = None
 
 # Specialized architectures: PatchTST, ViT, Swin, etc.
 

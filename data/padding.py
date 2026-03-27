@@ -533,170 +533,12 @@ def random_patch_masking(segments, masking_ratio=0.3, patch_size=10):
     return segments_masked
 
 
-def add_padding_tso_patch_hf(batch_samples, device, max_seq_len=1440,
-                             patch_size=1200, sampling_rate=20, padding_value=0.0):
-    """
-    Prepare batch data for TSO prediction from HuggingFace dataset samples.
-
-    Works with HuggingFace dataset samples instead of pandas DataFrames.
-    Each sample contains raw sensor data as lists, which are processed into minute-level patches.
-
-    Processing details (matching add_padding_tso_patch):
-    - Uses pre-computed time_cyclic from load_parquet_as_hf_dataset
-    - Derives "other" label from predictTSO and non-wear (not loaded from data)
-    - Label priority: predictTSO > non-wear > other
-
-    Args:
-        batch_samples: List of HF dataset samples, where each sample is a dict with keys:
-                      - 'segment': segment identifier (str)
-                      - 'x', 'y', 'z': lists of raw accelerometer data at 20Hz
-                      - 'time_cyclic': list of pre-computed time_cyclic values
-                      - 'temperature': list of temperature values (optional)
-                      - 'predictTSO': list of binary labels (0/1)
-                      - 'non-wear': list of binary labels (0/1)
-                      - 'num_samples': number of samples in the segment
-        device: torch device
-        max_seq_len: maximum sequence length in minutes (default: 1440 = 24h)
-        patch_size: samples per minute patch (default: 1200 = 60 seconds * 20Hz)
-        sampling_rate: sensor sampling rate in Hz (default: 20)
-        padding_value: value to use for padding
-
-    Returns:
-        pad_X: [batch_size, seq_len, patch_size, 5] - patched input features
-               5 channels: [x, y, z, temperature, time_cyclic]
-        pad_Y: [batch_size, seq_len] - minute-level class labels (0=other, 1=non-wear, 2=predictTSO)
-        x_lens: [batch_size] - original sequence lengths in minutes
-
-    Example:
-        from Helpers.DL_helpers import load_parquet_as_hf_dataset, batch_generator_hf, add_padding_tso_patch_hf
-
-        dataset = load_parquet_as_hf_dataset("/path/to/parquet_folder")
-        for batch_indices in batch_generator_hf(dataset, batch_size=16):
-            batch_samples = [dataset[i] for i in batch_indices]
-            pad_X, pad_Y, x_lens = add_padding_tso_patch_hf(
-                batch_samples, device, max_seq_len=1440, patch_size=1200
-            )
-            # Use pad_X, pad_Y for model forward pass
-    """
-    num_channels = 5  # x, y, z, temperature, time_cyclic
-
-    X_sequences = []
-    Y_sequences = []
-    x_lens = []
-
-    for sample in batch_samples:
-        # Extract data from HF sample (all are lists)
-        x_vals = np.array(sample['x'], dtype=np.float32)
-        y_vals = np.array(sample['y'], dtype=np.float32)
-        z_vals = np.array(sample['z'], dtype=np.float32)
-        temp_vals = np.array(sample['temperature'], dtype=np.float32) if 'temperature' in sample else np.zeros(len(sample['x']), dtype=np.float32)
-        time_vals = np.array(sample['time_cyclic'], dtype=np.float32) if 'time_cyclic' in sample else np.zeros(len(sample['x']), dtype=np.float32)
-
-        # Labels (lists of 0/1 for binary labels)
-        predictTSO_vals = np.array(sample['predictTSO'], dtype=np.int32) if 'predictTSO' in sample else np.zeros(len(sample['x']), dtype=np.int32)
-        nonwear_vals = np.array(sample['non-wear'], dtype=np.int32) if 'non-wear' in sample else np.zeros(len(sample['x']), dtype=np.int32)
-
-        # Determine total number of samples
-        num_samples = len(x_vals)
-
-        # Calculate number of complete minutes (patches)
-        num_minutes = num_samples // patch_size
-
-        # Limit to max_seq_len if specified
-        if max_seq_len is not None and num_minutes > max_seq_len:
-            num_minutes = max_seq_len
-            max_samples_truncate = num_minutes * patch_size
-            x_vals = x_vals[:max_samples_truncate]
-            y_vals = y_vals[:max_samples_truncate]
-            z_vals = z_vals[:max_samples_truncate]
-            temp_vals = temp_vals[:max_samples_truncate]
-            time_vals = time_vals[:max_samples_truncate]
-            predictTSO_vals = predictTSO_vals[:max_samples_truncate]
-            nonwear_vals = nonwear_vals[:max_samples_truncate]
-
-        minute_patches = []
-        minute_labels = []
-
-        # Process each minute patch
-        for minute_idx in range(num_minutes):
-            start_idx = minute_idx * patch_size
-            end_idx = start_idx + patch_size
-
-            # Extract patch data for this minute (use pre-computed time_cyclic)
-            x_patch = x_vals[start_idx:end_idx]
-            y_patch = y_vals[start_idx:end_idx]
-            z_patch = z_vals[start_idx:end_idx]
-            temp_patch = temp_vals[start_idx:end_idx]
-            time_patch = time_vals[start_idx:end_idx]
-
-            # Pad if needed (in case last minute is incomplete)
-            actual_len = len(x_patch)
-            if actual_len < patch_size:
-                pad_len = patch_size - actual_len
-                x_patch = np.pad(x_patch, (0, pad_len), constant_values=padding_value)
-                y_patch = np.pad(y_patch, (0, pad_len), constant_values=padding_value)
-                z_patch = np.pad(z_patch, (0, pad_len), constant_values=padding_value)
-                temp_patch = np.pad(temp_patch, (0, pad_len), constant_values=padding_value)
-                time_patch = np.pad(time_patch, (0, pad_len), constant_values=padding_value)
-
-            # Stack channels: [patch_size, 5]
-            patch = np.stack([x_patch, y_patch, z_patch, temp_patch, time_patch], axis=1)
-            minute_patches.append(patch)
-
-            # Determine minute-level label (like add_padding_tso_patch lines 2595-2601)
-            # Priority: predictTSO > non-wear > other
-            predictTSO_minute = predictTSO_vals[start_idx:min(end_idx, len(predictTSO_vals))]
-            nonwear_minute = nonwear_vals[start_idx:min(end_idx, len(nonwear_vals))]
-
-            # Derive "other" = not(predictTSO) and not(non-wear)
-            if np.any(predictTSO_minute):
-                label = 2  # predictTSO
-            elif np.any(nonwear_minute):
-                label = 1  # non-wear
-            else:
-                label = 0  # other (derived, not loaded)
-
-            minute_labels.append(label)
-
-        # Convert to tensors
-        if len(minute_patches) > 0:
-            seg_X = torch.FloatTensor(np.stack(minute_patches))  # [num_minutes, patch_size, 5]
-            seg_Y = torch.LongTensor(minute_labels)  # [num_minutes]
-
-            # Pad to max_seq_len if needed
-            if max_seq_len is not None and len(seg_X) < max_seq_len:
-                pad_len = max_seq_len - len(seg_X)
-                pad_X_template = torch.ones(pad_len, patch_size, num_channels) * padding_value
-                pad_Y_template = torch.full((pad_len,), -100, dtype=torch.long)
-                seg_X = torch.cat([seg_X, pad_X_template], dim=0)
-                seg_Y = torch.cat([seg_Y, pad_Y_template], dim=0)
-
-            X_sequences.append(seg_X)
-            Y_sequences.append(seg_Y)
-            x_lens.append(num_minutes)
-        else:
-            # Empty segment - create padded template
-            seg_X = torch.ones(max_seq_len, patch_size, num_channels) * padding_value
-            seg_Y = torch.full((max_seq_len,), -100, dtype=torch.long)
-            X_sequences.append(seg_X)
-            Y_sequences.append(seg_Y)
-            x_lens.append(0)
-
-    # Stack all sequences
-    pad_X = torch.stack(X_sequences).to(device)  # [batch_size, max_seq_len, patch_size, 5]
-    pad_Y = torch.stack(Y_sequences).to(device)  # [batch_size, max_seq_len]
-    x_lens = torch.LongTensor(x_lens).to(device)  # [batch_size]
-
-    return pad_X, pad_Y, x_lens
-
-
-
 def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
                      patch_size=1200, padding_value=0.0, num_channels=None):
     """
     Prepare batch from H5 dataset for TSO prediction.
 
-    This function is analogous to add_padding_tso_patch_hf but works with
+    This function is analogous to add_padding_tso_patch but works with
     preprocessed H5 data instead of HuggingFace datasets.
 
     Args:
@@ -717,7 +559,7 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
         batch_samples: List of dicts with segment info
 
     Note:
-        Label aggregation uses np.any() logic to match add_padding_tso_patch_hf (line 3536-3541):
+        Label aggregation uses np.any() logic to match add_padding_tso_patch (line 3536-3541):
         - If ANY sample in minute has predictTSO=1, label entire minute as predictTSO (2)
         - Else if ANY sample has non-wear=1, label entire minute as non-wear (1)
         - Otherwise label as other (0)
@@ -773,7 +615,7 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
             Y_reshaped = Y_batch[i, :samples_to_use, :].reshape(num_minutes, patch_size, 2)
 
             # For each minute, determine label (priority: predictTSO > non_wear > other)
-            # IMPORTANT: Use np.any() to match add_padding_tso_patch_hf behavior
+            # IMPORTANT: Use np.any() to match add_padding_tso_patch behavior
             for m in range(num_minutes):
                 minute_predictTSO = Y_reshaped[m, :, 0]  # [patch_size]
                 minute_nonwear = Y_reshaped[m, :, 1]  # [patch_size]

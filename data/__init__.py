@@ -15,7 +15,6 @@ from .loading import (
     load_data_nsucl,
     load_data_raw,
     load_data_from_h5,
-    load_parquet_as_hf_dataset,
 )
 
 # Preprocessing
@@ -41,7 +40,6 @@ from .padding import (
     add_padding_pretrain,
     add_padding_TSO,
     add_padding_tso_patch,
-    add_padding_tso_patch_hf,
     add_padding_tso_patch_h5,
     random_patch_masking,
     generate_time_cyclic,
@@ -60,8 +58,6 @@ from .augmentation import (
 from .batching import (
     batch_generator,
     get_nb_steps,
-    batch_generator_hf,
-    get_nb_steps_hf,
 )
 
 __all__ = [
@@ -76,7 +72,6 @@ __all__ = [
     'load_data_nsucl',
     'load_data_raw',
     'load_data_from_h5',
-    'load_parquet_as_hf_dataset',
     # Preprocessing
     'df_subset',
     'df_subset_segments',
@@ -96,7 +91,6 @@ __all__ = [
     'add_padding_pretrain',
     'add_padding_TSO',
     'add_padding_tso_patch',
-    'add_padding_tso_patch_hf',
     'add_padding_tso_patch_h5',
     'random_patch_masking',
     'generate_time_cyclic',
@@ -109,6 +103,4 @@ __all__ = [
     # Batching
     'batch_generator',
     'get_nb_steps',
-    'batch_generator_hf',
-    'get_nb_steps_hf',
 ]

@@ -34,7 +34,6 @@ from .components import (
 
 from .mamba_blocks import (
     ConvFeedForward,
-    ConvFeedForward_cls,
     drop_path,
     AffineDropPath,
     MaskMambaBlock,
@@ -46,7 +45,6 @@ from .attention import (
     AttLayer,
     AttModule,
     AttModule_mamba,
-    AttModule_mamba_cls,
     GatedAttentionPoolingMIL,
     MultiHeadSelfAttentionPooling,
     MaskedMaxAvgPooling,
@@ -66,6 +64,7 @@ from .encoder_decoder import (
     PositionalEncoding,
     Encoder,
     Decoder,
+    MBA_encoder_decoder,
     MBA_tsm_encoder_decoder_ch_bottleneck,
     MBA_tsm_encoder_decoder_seq_bottleneck,
     MBA_tsm_encoder_decoder_progressive_with_skip_connection,
@@ -135,14 +134,7 @@ from .setup import (
     setup_model,
 )
 
-# Try to import ViT1D if available
-try:
-    from ..net.vit1d import ViT1D
-except:
-    try:
-        from .net.vit1d import ViT1D
-    except:
-        ViT1D = None
+from .vit1d import ViT1D
 
 __all__ = [
     # Components
@@ -155,7 +147,6 @@ __all__ = [
     'FeatureExtractorForPretraining',
     # Mamba blocks
     'ConvFeedForward',
-    'ConvFeedForward_cls',
     'drop_path',
     'AffineDropPath',
     'MaskMambaBlock',
@@ -165,7 +156,6 @@ __all__ = [
     'AttLayer',
     'AttModule',
     'AttModule_mamba',
-    'AttModule_mamba_cls',
     'GatedAttentionPoolingMIL',
     'MultiHeadSelfAttentionPooling',
     'MaskedMaxAvgPooling',
@@ -181,6 +171,7 @@ __all__ = [
     'PositionalEncoding',
     'Encoder',
     'Decoder',
+    'MBA_encoder_decoder',
     'MBA_tsm_encoder_decoder_ch_bottleneck',
     'MBA_tsm_encoder_decoder_seq_bottleneck',
     'MBA_tsm_encoder_decoder_progressive_with_skip_connection',

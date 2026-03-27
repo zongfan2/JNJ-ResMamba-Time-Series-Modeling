@@ -9,7 +9,7 @@ import numpy as np
 from mamba_ssm import Mamba
 
 from .mamba_blocks import MBA, AffineDropPath
-from .attention import MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
+from .attention import AttModule_mamba, MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 from .components import FeatureExtractor
 
 # Primary ResMamba models
@@ -660,18 +660,17 @@ class MBA_patch(nn.Module):
         # Mamba encoder layers using existing AttModule_mamba
         if num_encoder_layers > 0:
             self.encoder = nn.ModuleList([
-                AttModule_mamba_cls(
+                AttModule_mamba(
                     dilation=min(16, 2**i), #2**i
-                    in_channels=self.embed_dim, 
-                    out_channels=self.embed_dim, 
-                    r1=2, 
-                    r2=2,
-                    att_type='sliding_att', 
-                    stage='encoder', 
-                    alpha=1, 
+                    in_channels=self.embed_dim,
+                    out_channels=self.embed_dim,
+                    att_type='sliding_att',
+                    stage='encoder',
+                    alpha=1,
                     drop_path_rate=drop_path_rate,
                     dropout_rate=dropout_rate,
-                    kernel_size=kernel_size_mba
+                    kernel_size=kernel_size_mba,
+                    norm="IN"
                 ) for i in range(num_encoder_layers)
             ])
         else:

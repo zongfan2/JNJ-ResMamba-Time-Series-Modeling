@@ -10,13 +10,11 @@ import subprocess
 import joblib
 
 shell_script = '''
-sudo python3.11 -m pip install -r munge/predictive_modeling/requirements-tso.txt
+cd munge/predictive_modeling
+sudo python3.11 -m pip install -r requirements-tso.txt
 sudo python3.11 -m pip install -e .
-sudo python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures  mamba-ssm[causal-conv1d]==2.2.2
+sudo python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures mamba-ssm[causal-conv1d]==2.2.2
 '''
-# shell_script = '''
-# sudo python3.11 -m pip install -r munge/predictive_modeling/requirements-tso.txt
-# '''
 result = subprocess.run(shell_script, shell=True, capture_output=True, text=True)
 
 import os

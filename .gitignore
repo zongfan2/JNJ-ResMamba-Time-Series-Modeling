@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (large, not tracked)
+*.h5
+*.hdf5
+*.parquet
+*.csv
+!experiments/configs/*.csv
+
+# Model checkpoints
+*.pt
+*.pth
+*.ckpt
+checkpoints/
+
+# Logs and experiment artifacts
+experiments/logs/
+*.log
+wandb/
+mlruns/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Generated summary files (from refactoring)
+CONSOLIDATION_SUMMARY.md
+ENVIRONMENT_SETUP_SUMMARY.md
+REFACTORING_COMPLETE.md
+TESTING_QUICK_START.md
+models/REFACTORING_NOTES.md
+tests/CREATION_SUMMARY.md
+tests/EQUIVALENCE_TEST_README.md
+tests/INDEX.md
+tests/IMPORT_TEST_REPORT.md
+
+# App directory (ignored per project spec)
+app/
+papers/
+acmart-primary/

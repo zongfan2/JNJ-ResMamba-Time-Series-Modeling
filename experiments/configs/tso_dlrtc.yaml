@@ -1,0 +1,62 @@
+experiment:
+  name: tso_dlrtc
+  description: "TSO detection with Dynamic Label Refinement and Temporal Consistency"
+  task: tso_detection
+  author: "researcher"
+  date: "2026-03-26"
+  notes: |
+    This model uses DLR-TC framework to learn from noisy sensor labels.
+    Employs two-phase training:
+    1. Warmup (10 epochs): Learn clean patterns with standard cross entropy
+    2. Joint refinement (25 epochs): Alternate between refining labels and training model
+
+    Useful for datasets with imperfect ground truth labels from sensors.
+    Expected improvement: +3-7% F1 over baseline if labels are noisy.
+
+data:
+  format: h5
+  sampling_rate: 20
+  channels: [x, y, z, temp, time_sin, time_cos]
+  padding_value: -999
+
+model:
+  architecture: mba4tso_patch
+  n_resnet_blocks: 4
+  d_model: 128
+  patch_size: 1200
+  dropout: 0.2
+  attention_heads: 4
+
+training:
+  optimizer: rmsprop
+  lr: 0.001
+  batch_size: 24
+  epochs: 35
+  early_stopping_patience: 10
+
+training_strategy: dlrtc
+dlrtc:
+  warmup_epochs: 10
+  joint_epochs: 25
+  gce_q: 0.7            # GCE noise robustness (0.5=very robust, 0.9=less robust)
+  alpha: 0.1            # Compatibility weight (anchor to original labels)
+  beta: 0.5             # Temporal smoothness weight (higher=smoother)
+  label_lr: 0.01        # Label update learning rate
+
+loss:
+  type: dlrtc
+  components:
+    gce: 1.0            # Generalized cross entropy weight
+    compatibility: 0.1  # KL-divergence anchor weight
+    temporal: 0.5       # Total variation smoothness weight
+
+evaluation:
+  strategy: lofo
+  metrics: [f1, precision, recall, auc, accuracy]
+  val_split: 0.2
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42
+  use_deterministic_algorithms: true

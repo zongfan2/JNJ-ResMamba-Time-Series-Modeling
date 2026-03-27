@@ -1,0 +1,52 @@
+experiment:
+  name: tso_baseline
+  description: "TSO detection baseline with MBA4TSO_Patch architecture"
+  task: tso_detection
+  author: "researcher"
+  date: "2026-03-26"
+  notes: |
+    This is the baseline model for TSO (Time Spent Outside) detection.
+    Uses standard supervised learning without label refinement.
+    Baseline for comparison against:
+    - DLR-TC with noisy label learning
+    - Post-processing improvements
+    - Continuity loss variants
+
+data:
+  format: h5
+  sampling_rate: 20
+  channels: [x, y, z, temp, time_sin, time_cos]
+  padding_value: -999
+
+model:
+  architecture: mba4tso_patch
+  n_resnet_blocks: 4
+  d_model: 128
+  patch_size: 1200  # 60 seconds at 20Hz
+  dropout: 0.2
+  attention_heads: 4
+
+training:
+  optimizer: rmsprop
+  lr: 0.001
+  scheduler: cosine_annealing_warm_restarts
+  batch_size: 24
+  epochs: 50
+  early_stopping_patience: 10
+  warmup_epochs: 5
+
+loss:
+  type: cross_entropy
+  lambda_cls: 1.0
+  lambda_reg: 0.5
+
+evaluation:
+  strategy: lofo
+  metrics: [f1, precision, recall, auc, accuracy]
+  val_split: 0.2
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42
+  use_deterministic_algorithms: true

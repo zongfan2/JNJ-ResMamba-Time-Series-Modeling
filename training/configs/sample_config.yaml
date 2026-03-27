@@ -1,0 +1,229 @@
+# Sample Training Configuration for Scratch Detection and TSO Models
+# =====================================================================
+#
+# This YAML file demonstrates all key hyperparameters used in training.
+# Customize these values for your specific use case.
+
+# ============================================================================
+# DATA CONFIGURATION
+# ============================================================================
+data:
+  # Path to input data (folder, parquet, or H5 file)
+  input_data_folder: "/path/to/data"
+
+  # Optional: Path to H5 preprocessed data (faster loading)
+  input_h5_file: "/path/to/data.h5"
+
+  # Data augmentation iterations
+  data_augmentation: 0
+
+  # Motion filtering settings
+  motion_filter: true
+  motion_threshold: 0.05  # Threshold for motion filtering
+
+  # Scaling and normalization
+  scaler_path: "/path/to/std_scaler.bin"
+
+  # Features selection
+  features_type: "raw"  # Options: raw, hand_crafted
+
+# ============================================================================
+# MODEL CONFIGURATION
+# ============================================================================
+model:
+  # Model architecture to use
+  name: "MBA_tsm_with_padding"  # Options: MBA_tsm, MBA_tsm_with_padding, PatchTST, EfficientUNet
+
+  # Hidden dimensions and architecture parameters
+  hidden_dim: 128
+  num_layers: 3
+
+  # Feature extraction method
+  feature_extractor: "ResTCN"  # Options: TCN, ResTCN
+
+  # Attention mechanism
+  use_attention: true
+  attention_heads: 4
+
+  # Padding configuration (for padded models)
+  padding_value: -999  # Use extreme value for clear detection
+  pad_len: 300  # Padded sequence length
+
+  # Contrastive learning
+  use_contrastive_loss: true
+  projection_dim: 128
+
+# ============================================================================
+# TRAINING CONFIGURATION
+# ============================================================================
+training:
+  # Basic training parameters
+  epochs: 200
+  batch_size: 32
+  learning_rate: 0.001
+
+  # Optimizer configuration
+  optimizer: "AdamW"  # Options: AdamW, RMSprop, RAdam
+  weight_decay: 0.0001
+
+  # Learning rate scheduling
+  lr_scheduler: "cosine"  # Options: cosine, step, exponential
+  warmup_epochs: 10
+
+  # Loss function weights (for multi-task learning)
+  loss_weights:
+    wl1: 1.0  # Classification loss weight
+    wl2: 0.5  # Per-timestep loss weight
+    wl3: 0.3  # Severity/continuity loss weight
+
+  # Data augmentation in training
+  mixup_alpha: 0.2  # Mixup augmentation parameter
+
+  # Early stopping
+  early_stopping:
+    enabled: true
+    patience: 20
+    metric: "val_f1"  # Metric to monitor
+    mode: "max"  # Maximize F1 score
+
+# ============================================================================
+# VALIDATION AND TESTING
+# ============================================================================
+validation:
+  # Cross-validation strategy
+  strategy: "LOFO"  # Options: LOFO (Leave One Fold Out), LOSO (Leave One Subject Out)
+
+  # Validation split ratio (if not using cross-validation)
+  val_split: 0.2
+
+  # Testing configuration
+  testing_strategy: "LOFO"
+
+  # Metrics to track
+  metrics:
+    - f1_score
+    - accuracy
+    - precision
+    - recall
+    - auc_roc
+
+# ============================================================================
+# TSO-SPECIFIC CONFIGURATION
+# ============================================================================
+tso:
+  # TSO prediction class mapping
+  classes:
+    0: "other"
+    1: "non-wear"
+    2: "predictTSO"
+
+  # Label smoothing for noisy labels (DLR-TC)
+  use_label_refinement: false
+  label_refinement_method: "dlrtc"  # Dynamic Label Refinement with Temporal Consistency
+
+  # Temporal smoothing in post-processing
+  post_processing:
+    enabled: true
+    method: "majority_vote"  # Options: majority_vote, gaussian, custom
+    window_size: 5
+
+  # Temporal consistency loss weight
+  temporal_consistency_weight: 0.1
+
+# ============================================================================
+# SCRATCH DETECTION CONFIGURATION
+# ============================================================================
+scratch:
+  # Binary classification
+  classes:
+    0: "no_scratch"
+    1: "scratch"
+
+  # Per-timestep intensity prediction
+  predict_intensity: true
+
+# ============================================================================
+# PRETRAINING CONFIGURATION
+# ============================================================================
+pretraining:
+  # Enable self-supervised pretraining
+  enabled: false
+
+  # Pretraining method
+  method: "DINO"  # Options: AIM, DINO, RelCon, SimCLR
+
+  # Pretraining parameters
+  pretraining_epochs: 100
+  pretraining_batch_size: 32
+  pretraining_lr: 0.001
+
+  # Momentum and loss parameters
+  momentum: 0.99  # For momentum encoders
+  temperature: 0.07  # Temperature for contrastive loss
+
+# ============================================================================
+# OUTPUT AND LOGGING
+# ============================================================================
+output:
+  # Output directory for results
+  output_folder: "./results"
+
+  # Save model checkpoints
+  save_checkpoints: true
+  checkpoint_frequency: 10  # Save every N epochs
+
+  # Logging configuration
+  logging_level: "INFO"
+  tensorboard: true
+  tensorboard_dir: "./logs"
+
+  # Save best model
+  save_best_model: true
+  best_model_metric: "val_f1"
+
+# ============================================================================
+# HARDWARE AND DISTRIBUTION
+# ============================================================================
+hardware:
+  # GPU configuration
+  num_gpus: 1
+  cuda_visible_devices: "0"
+
+  # Distributed training (Ray)
+  distributed: false
+  num_workers: 1
+
+  # Mixed precision training
+  mixed_precision: false
+
+# ============================================================================
+# RANDOM SEEDS AND REPRODUCIBILITY
+# ============================================================================
+reproducibility:
+  # Random seeds for reproducibility
+  seed: 42
+  torch_seed: 42
+  numpy_seed: 42
+
+  # Deterministic operations
+  deterministic: true
+
+# ============================================================================
+# ADVANCED PARAMETERS (Optional)
+# ============================================================================
+advanced:
+  # Gradient clipping
+  gradient_clip_value: 1.0
+
+  # Batch normalization momentum
+  batch_norm_momentum: 0.1
+
+  # Dropout rate
+  dropout_rate: 0.2
+
+  # Parameter initialization
+  initialization_method: "kaiming_uniform"
+
+  # Fine-tuning pretrained models
+  pretrained_model_path: ""
+  freeze_encoder: false

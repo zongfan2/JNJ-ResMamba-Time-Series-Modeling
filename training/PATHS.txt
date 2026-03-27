@@ -1,0 +1,81 @@
+TRAINING MODULE - FILE PATHS
+=============================
+
+Base Directory: /sessions/bold-dreamy-dijkstra/mnt/JNJ/training/
+
+TRAINING SCRIPTS
+================
+training/train_scratch.py              Scratch detection (variable-length)
+training/train_scratch_h5.py           Scratch detection (H5 data - fastest)
+training/train_tso.py                  TSO prediction (aggregated features)
+training/train_tso_patch.py            TSO prediction (raw sensor patches)
+training/train_tso_patch_h5.py         TSO prediction (H5 data - fastest)
+training/train_tso_dlrtc.py            TSO with robust label learning
+training/pretrain.py                   Self-supervised pretraining
+training/convert_h5.py                 Parquet to H5 conversion
+
+DOCUMENTATION
+==============
+training/README.md                     Main documentation
+training/IMPORT_MAPPING.md             Old vs new import paths
+training/ORGANIZATION_SUMMARY.md       Reorganization overview
+training/PATHS.txt                     This file
+
+CONFIGURATION
+==============
+training/configs/sample_config.yaml    Sample configuration template
+
+PACKAGE FILES
+=============
+training/__init__.py                   Package initialization
+
+PARENT MODULES (referenced by training scripts)
+================================================
+../models/                             Model architectures
+../data/                               Data loading and preprocessing
+../losses/                             Loss functions
+../utils/                              Utilities (EarlyStopping, etc.)
+../evaluation/                         Evaluation metrics and visualization
+
+ORIGINAL SCRIPTS (for reference, in root directory)
+===================================================
+../predict_scratch_segment.py
+../predict_scratch_segment_h5.py
+../predict_TSO_segment.py
+../predict_TSO_segment_patch.py
+../predict_TSO_segment_patch_h5.py
+../predict_TSO_segment_patch_dlrtc.py
+../pretrain.py
+../convert_parquet_to_h5.py
+
+RUNNING SCRIPTS
+===============
+
+From JNJ root directory:
+  python training/train_scratch.py ...
+  python training/train_scratch_h5.py ...
+  python training/train_tso.py ...
+  python training/train_tso_patch.py ...
+  python training/train_tso_patch_h5.py ...
+  python training/train_tso_dlrtc.py ...
+  python training/pretrain.py ...
+  python training/convert_h5.py ...
+
+ABSOLUTE PATHS
+===============
+Base: /sessions/bold-dreamy-dijkstra/mnt/JNJ/training/
+
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/train_scratch.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/train_scratch_h5.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/train_tso.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/train_tso_patch.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/train_tso_patch_h5.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/train_tso_dlrtc.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/pretrain.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/convert_h5.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/__init__.py
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/README.md
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/IMPORT_MAPPING.md
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/ORGANIZATION_SUMMARY.md
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/PATHS.txt
+/sessions/bold-dreamy-dijkstra/mnt/JNJ/training/configs/sample_config.yaml

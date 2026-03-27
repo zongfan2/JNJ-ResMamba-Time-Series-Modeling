@@ -1,0 +1,53 @@
+experiment:
+  name: scratch_baseline
+  description: "Deep Scratch LOSO baseline with ResMamba architecture"
+  task: scratch_detection
+  author: "researcher"
+  date: "2026-03-26"
+  notes: |
+    This is the baseline model for scratch detection without advanced techniques.
+    Uses ResMamba blocks for temporal modeling of 3-channel accelerometer data.
+    Baseline for comparison against:
+    - Contrastive learning approaches
+    - Advanced post-processing
+    - DLR-TC label refinement
+
+data:
+  format: h5
+  sampling_rate: 20
+  channels: [x, y, z]
+  padding_value: -999
+
+model:
+  architecture: mba_tsm_with_padding
+  n_resnet_blocks: 4
+  d_model: 128
+  n_mamba_layers: 4
+  dropout: 0.2
+  attention_heads: 4
+
+training:
+  optimizer: rmsprop
+  lr: 0.001
+  scheduler: cosine_annealing_warm_restarts
+  batch_size: 32
+  epochs: 50
+  early_stopping_patience: 10
+  warmup_epochs: 5
+
+loss:
+  type: cross_entropy
+  lambda_cls: 1.0
+  lambda_reg: 0.5
+  lambda_mask: 0.3
+
+evaluation:
+  strategy: loso
+  metrics: [f1, precision, recall, auc, accuracy]
+  val_split: 0.2
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42
+  use_deterministic_algorithms: true

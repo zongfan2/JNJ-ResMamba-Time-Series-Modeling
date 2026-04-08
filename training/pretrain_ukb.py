@@ -21,8 +21,26 @@ Usage (Domino):
         --config experiments/configs/pretrain_ukb_dino.yaml
 """
 
+import subprocess
 import os
 import sys
+
+# ---------------------------------------------------------------------------
+# Project root on sys.path so that `from models import ...` works from Domino
+# ---------------------------------------------------------------------------
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+
+import joblib
+
+shell_script = '''
+cd munge/predictive_modeling
+sudo python3.11 -m pip install -r requirement-ml.txt
+sudo python3.11 -m pip install -e .
+sudo python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures mamba-ssm[causal-conv1d]==2.2.2
+'''
+result = subprocess.run(shell_script, shell=True, capture_output=True, text=True)
+
 import argparse
 import gc
 import math
@@ -41,12 +59,6 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
-# ---------------------------------------------------------------------------
-# Project root on sys.path so that `from models import ...` works from Domino
-# ---------------------------------------------------------------------------
-_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 

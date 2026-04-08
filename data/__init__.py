@@ -17,6 +17,9 @@ from .loading import (
     load_data_from_h5,
 )
 
+# UKB data loading
+from .loading_ukb_h5 import load_ukb_pretrain_h5
+
 # Preprocessing
 from .preprocessing import (
     df_subset,

@@ -23,7 +23,7 @@ from .attention import (
     MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 )
 from .components import FeatureExtractor, FeatureExtractorConv2d, FeatureExtractorForPretraining
-from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, MBA_v1, latent_mixup, masked_avg_pool, create_mask
+from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, MBA_v1, MBA_v1_ForPretraining, latent_mixup, masked_avg_pool, create_mask
 from .encoder_decoder import (
     MBA_encoder_decoder,
     MBA_tsm_encoder_decoder_ch_bottleneck,
@@ -191,6 +191,23 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                            num_filters=num_filters,
                            encoderlayer=featurelayer,
                            norm1=norm1, norm2=norm2, norm3=norm3)
+        case "mbav1_pretrain":
+            dropout_rate = best_params['dropout']
+            drop_path_rate = best_params['droppath']
+            kernel_size_encoder = best_params["kernel_f"]
+            num_encoder_layers = best_params["num_feature_layers"]
+            featurelayer = best_params["featurelayer"]
+            num_filters = best_params['num_filters']
+            norm1 = best_params['norm1']
+            model = MBA_v1_ForPretraining(input_tensor_size,
+                           num_encoder_layers=num_encoder_layers,
+                           drop_path_rate=drop_path_rate,
+                           kernel_size_encoder=kernel_size_encoder,
+                           dropout_rate=dropout_rate,
+                           max_seq_len=max_seq_len,
+                           num_filters=num_filters,
+                           encoderlayer=featurelayer,
+                           norm1=norm1)
         case "mba_padding":
             dropout_rate = best_params['dropout']
             drop_path_rate = best_params['droppath']

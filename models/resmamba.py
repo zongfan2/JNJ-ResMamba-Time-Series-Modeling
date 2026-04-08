@@ -1167,3 +1167,103 @@ class MBA_v1(nn.Module):
         # att=None, contrastive_embedding=None, mixup_info=None
         return x1, x2, x3, None, None, None
 
+
+# ============================================================================
+# MBA_v1_ForPretraining: Wrapper for self-supervised pretraining
+# ============================================================================
+
+class MBA_v1_ForPretraining(nn.Module):
+    """
+    Pretraining wrapper for MBA_v1 encoder.
+
+    Reuses the exact same encoder components (input_projection, cls_token,
+    encoder, positional_encoding) as MBA_v1 so pretrained weights transfer
+    directly via matching parameter names.
+
+    For self-supervised methods (DINO, SimCLR) the model returns a pooled
+    feature vector extracted from the CLS token after the encoder pass.
+
+    Usage:
+        pretrain_model = MBA_v1_ForPretraining(...)
+        dino = DINOPretrainer(base_model=pretrain_model, ...)
+        # ... train ...
+        # Transfer to MBA_v1:
+        mbav1 = MBA_v1(...)
+        mbav1 = load_pretrained_encoder_into_mbav1(mbav1, pretrain_ckpt_path)
+    """
+
+    def __init__(self, input_dim=3, num_filters=64, num_encoder_layers=7,
+                 drop_path_rate=0.3, kernel_size_encoder=3,
+                 dropout_rate=0.2, max_seq_len=1220,
+                 encoderlayer="TCN", norm1='IN'):
+        super().__init__()
+
+        # --- Identical to MBA_v1 encoder ---
+        self.input_projection = ConvProjection(input_dim, num_filters, norm1)
+        self.cls_token = nn.Parameter(torch.randn(1, num_filters, 1))
+        self.num_encoder_layers = num_encoder_layers
+
+        self.encoder = FeatureExtractor(
+            tsm_horizon=64,
+            in_channels=num_filters,
+            pos_embed_dim=4,
+            num_filters=num_filters,
+            kernel_size=kernel_size_encoder,
+            num_feature_layers=num_encoder_layers,
+            tsm=False, featurelayer=encoderlayer, norm=norm1
+        )
+
+        self.positional_encoding = PositionalEncoding(
+            d_model=num_filters, max_len=max_seq_len
+        )
+
+        self.num_filters = num_filters
+
+    def forward(self, x, x_lengths, **kwargs):
+        """
+        Encode and return CLS-token pooled features.
+
+        Args:
+            x: [B, SeqLen, C] — channel-last.
+               DINOPretrainer internally does crop.permute(0,2,1) before
+               calling the student, so input arrives as [B, L, C].
+            x_lengths: sequence lengths tensor
+
+        Returns:
+            pooled: [B, num_filters]
+        """
+        batch_size, seq_len, channels = x.size()
+
+        mask = create_mask(
+            torch.tensor(x_lengths, device=x.device) if not isinstance(x_lengths, torch.Tensor) else x_lengths,
+            seq_len, batch_size, x.device
+        )
+
+        # Input projection: [B, L, C] -> [B, num_filters, L]
+        x = self.input_projection(x.permute(0, 2, 1))
+
+        # CLS token
+        token = self.cls_token.expand(batch_size, -1, -1)
+        x = torch.cat((token, x), dim=2)
+        mask = torch.cat((torch.ones(batch_size, 1, device=x.device), mask), dim=1)
+
+        # Encoder
+        if self.num_encoder_layers > 0:
+            x, _ = self.encoder(x, mask, return_intermediates=True)
+
+        # Positional encoding
+        x = self.positional_encoding(x)
+
+        # CLS token pooling
+        pooled = x[:, :, 0]  # [B, num_filters]
+        return pooled
+
+    def get_encoder_state_dict(self):
+        """Return only the encoder parameter names matching MBA_v1."""
+        return {
+            'input_projection': self.input_projection.state_dict(),
+            'cls_token': self.cls_token.data,
+            'encoder': self.encoder.state_dict(),
+            'positional_encoding': self.positional_encoding.state_dict(),
+        }
+

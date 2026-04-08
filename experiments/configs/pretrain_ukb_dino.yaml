@@ -1,0 +1,52 @@
+# =============================================================================
+# UKB DINO Pretraining Config for Deep Scratch
+# =============================================================================
+# Pre-trains MBA_v1 encoder on UK Biobank accelerometer data using DINO.
+# The resulting encoder weights can then be loaded into MBA_v1 for finetuning
+# on JNJ scratch detection data.
+#
+# Usage:
+#   python3.11 training/pretrain_ukb.py --config experiments/configs/pretrain_ukb_dino.yaml
+
+# --- Data ---
+data:
+  ukb_h5_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/ukb_pretrain_20hz.h5
+  max_segments: 0  # 0 = load all
+
+# --- Model ---
+model:
+  model: mbav1_pretrain
+  pretraining_method: DINO
+
+# --- Training ---
+training:
+  batch_size: 32
+  epochs: 100
+  lr: 0.0001
+  optim: AdamW
+  weight_decay: 0.04
+  warmup_epochs: 5
+  patience: 15
+  gradient_clip: 1.0
+  use_amp: "True"
+
+# --- DINO-specific ---
+dino:
+  momentum_start: 0.996
+  momentum_end: 1.0
+  projection_dim: 256
+  projection_hidden: 512
+
+# --- Checkpoint ---
+checkpoint:
+  save_every: 10
+  keep_last_n: 3
+
+# --- GPU ---
+gpu:
+  num_gpu: "4"
+
+# --- Output ---
+output:
+  output_dir: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/pretrain_dino/
+  clear_tracker: "False"

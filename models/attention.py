@@ -129,7 +129,7 @@ class AttModule(nn.Module):
         
     def forward(self, x,f,  mask):
         out = self.feed_forward(x)
-        out = self.alpha * self.att_layer(self.instance_norm(out),f, mask) + out
+        out = self.alpha * self.att_layer(self.norm(out),f, mask) + out
         out = self.conv_1x1(out)
         out = self.dropout(out)
         return (x + out) * mask.unsqueeze(1)#[:, 0:1, :]
@@ -387,7 +387,7 @@ class AttModule_mamba_causal(nn.Module):
             mask = padding_mask.unsqueeze(1) if padding_mask is not None else None
 
         out = self.feed_forward(x)
-        out = self.alpha * self.att_layer(self.instance_norm(out), mask) + out
+        out = self.alpha * self.att_layer(self.norm(out), mask) + out
         out = self.dropout(out)
 
         if mask is not None:
@@ -398,28 +398,33 @@ class AttModule_mamba_causal(nn.Module):
 
 class AttModule_mamba_cross(nn.Module):
     """Cross-attention module for encoder-decoder architectures using Mamba blocks."""
-    def __init__(self, dilation, in_channels, out_channels, r1, r2, att_type, stage, alpha, drop_path_rate=0.3, kernel_size=7, dropout_rate=0.2):
+    def __init__(self, dilation, in_channels, out_channels, r1, r2, att_type, stage, alpha, drop_path_rate=0.3, kernel_size=7, dropout_rate=0.2, norm="IN"):
         super(AttModule_mamba_cross, self).__init__()
         self.feed_forward = ConvFeedForward(dilation, in_channels, out_channels, kernel_size=kernel_size)
-        self.instance_norm = nn.InstanceNorm1d(in_channels, track_running_stats=False)
-        self.self_att_layer = MaskMambaBlock(in_channels, drop_path_rate=drop_path_rate, kernel_size=kernel_size)
-        self.cross_att_layer = MaskMambaBlock(in_channels, drop_path_rate=drop_path_rate, kernel_size=kernel_size)
-        self.conv_1x1 = nn.Conv1d(in_channels, out_channels, 1)
+        if norm == 'GN':
+            self.norm = nn.GroupNorm(num_groups=4, num_channels=out_channels)
+        elif norm == 'BN':
+            self.norm = nn.BatchNorm1d(out_channels)
+        else:
+            self.norm = nn.InstanceNorm1d(out_channels, track_running_stats=False)
+        self.self_att_layer = MaskMambaBlock(out_channels, drop_path_rate=drop_path_rate, kernel_size=kernel_size)
+        self.cross_att_layer = MaskMambaBlock(out_channels, drop_path_rate=drop_path_rate, kernel_size=kernel_size)
+        self.conv_1x1 = nn.Conv1d(out_channels, out_channels, 1)
         self.dropout = nn.Dropout(dropout_rate)
         self.alpha = alpha
 
     def forward(self, x, encoder_states, padding_mask):
         m_batchsize, c1, L = x.size()
         out = self.feed_forward(x)
-        out = self.alpha * self.self_att_layer(self.instance_norm(out), padding_mask) + out
+        out = self.alpha * self.self_att_layer(self.norm(out), padding_mask) + out
 
         if encoder_states is not None:
             if encoder_states.shape[2] == out.shape[2]:
-                cross_out = self.alpha * self.cross_att_layer(self.instance_norm(encoder_states), padding_mask)
+                cross_out = self.alpha * self.cross_att_layer(self.norm(encoder_states), padding_mask)
                 out = out + cross_out
             else:
                 encoder_states_resized = F.interpolate(encoder_states, size=L, mode='linear', align_corners=False)
-                cross_out = self.alpha * self.cross_att_layer(self.instance_norm(encoder_states_resized), padding_mask)
+                cross_out = self.alpha * self.cross_att_layer(self.norm(encoder_states_resized), padding_mask)
                 out = out + cross_out
 
         out = self.dropout(out)

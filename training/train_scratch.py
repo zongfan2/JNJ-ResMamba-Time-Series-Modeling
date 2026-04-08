@@ -33,7 +33,7 @@ import argparse
 parser = argparse.ArgumentParser(description='Run Predictive Modeling Pipeline.')
 parser.add_argument('--config', type=str, required=False, default="", help='Path to YAML config file. When provided, config values override defaults but CLI args still take precedence.')
 parser.add_argument('--input_data_folder', type=str, default=None, help='Path to the input data file')
-parser.add_argument('--clear_tracker', type=bool, default=False, required=False, help='Clear Job Tracking Folder')
+parser.add_argument('--clear_tracker', default=None, required=False, help='Clear Job Tracking Folder')
 parser.add_argument('--model', type=str, default=None, help='Define the model to be used')
 parser.add_argument('--output', type=str, default=None, help='Define the name of the output folder')
 parser.add_argument('--execution_mode', type=str, default="train", required=False, help='Define if the script should train or tune the model')

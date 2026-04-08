@@ -1086,7 +1086,10 @@ class MBA_v1(nn.Module):
         self.num_encoder_layers = num_encoder_layers
 
         self.encoder = FeatureExtractor(
-            num_filters, num_filters=num_filters,
+            tsm_horizon=64,
+            in_channels=num_filters,
+            pos_embed_dim=4,  # match default num_pos_channels so extract_pos_embed=False
+            num_filters=num_filters,
             kernel_size=kernel_size_encoder,
             num_feature_layers=num_encoder_layers,
             tsm=False, featurelayer=encoderlayer, norm=norm1

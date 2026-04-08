@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 from typing import Optional, Tuple
 import numpy as np
+from .mamba_blocks import ConvFeedForward, MaskMambaBlock
 
 
 # Attention and pooling modules

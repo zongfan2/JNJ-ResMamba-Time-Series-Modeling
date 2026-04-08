@@ -1,0 +1,51 @@
+experiment:
+  name: scratch_mbav1
+  description: "Deep Scratch with mbav1 data, trained on NOPROD data"
+  task: scratch_detection
+  date: "2026-04-08"
+  notes: |
+    Deep Scratch with mbav1 data, trained on NOPROD data
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/code/munge/predictive_modeling/std_scaler_3s.bin
+  # Alternative data folders (uncomment to switch):
+  # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_2s_b1s_imerit/
+  # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_2s_b1s_imerit_sleep_nonwearOR/raw/
+  # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_2s_b1s_imerit_sleep_nonwearOR_5smerge_nograv_change/raw/
+  # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_grav_stdrange_start18h_sleepy_original_nonwear60_temp25_sleep60_win/raw/
+  # input_folder: /mnt/data/Nocturnal-scratch/gene_20hz_3s_b1s_st18_ori_van_nw60nomerg_gap120_slp60_ORtp25_enha/raw/
+  # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_test_scratch/test_tso_preprocess/raw/
+
+model:
+  architecture: mbav1
+  # Alternative architectures (uncomment to switch):
+  # architecture: mbav1
+  # architecture: vit1d
+  # architecture: resnetmambaunet
+  # architecture: mba_encoder
+
+training:
+  output: ns_detect-mbav1-bs=32-param16-test
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+  # Alternative pretrained weights (uncomment to use):
+  # pretrained_model_path: /mnt/data/GENEActive-featurized/results/DL/geneactive_20hz_3s_b1s_production/ns_detect-mba_encoder-pretrain=DINO-bs=32-norm=GN-use_cls_token=True-pos_embed=True/training/model_weights/mba_encoder_DINO_test_subject_All_weights.pth
+  # pretrained_model_path: /mnt/data/GENEActive-featurized/results/DL/gene_20hz_3s_b1s_st18_ori_van_nw60nomerg_gap120_slp60_ORtp25_enh/ns_detect-mbatsm-bs=32-param16-skip_connect-cross_attn/training/model_weights/mbatsm_test_subject_FOLD3_weights.pth
+  # pretrained_model_path: /mnt/data/GENEActive-featurized/results/DL/gene_20hz_3s_b1s_st18_ori_van_nw60nomerg_gap120_slp60_ORtp25_enh/ns_detect-mbatsm-bs=32-param16-skip_connect-cross_attn-pooling=avg_only/training/model_weights/mbatsm_test_subject_FOLD3_weights.pth
+  # Alternative scalers:
+  # scaler_path: /mnt/data/GENEActive-featurized/results/DL/geneactive_20hz_3s_b1s_production/ns_detect-mbatsm-pretrain=DINO-bs=32-cls_token=True-ResNet-rep2/training/model_weights/mbatsm_test_subject_All_scaler.joblib
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

@@ -244,7 +244,8 @@ def load_optuna_pretrained_best_params(optuna_best_param_path):
                      '13_2_batch64': {'batch_size': 64, 'num_filters': 64, 'lr': 0.001, 'dropout': 0.2, 'droppath': 0.2,'channel_masking_rate': 0, 'kernel_f': 13,'kernel_MBA': 11, 'kernel_MBA1': 11, 'kernel_MBA2': 11, 'num_feature_layers': 7, 'blocks_MBA': 7,'blocks_MBA1': 7, 'blocks_MBA2': 0,'dilation1': True, 'dilation2': True,'encoder_bottelneck':1, 'MBA_encoder': True, 'wl1': 0.5, 'wl2': 0.5, 'wl3': 0.9, 'optim': 'RMSprop', 'pos_weight_l1': False, 'pos_weight_l2': True, 'cls_token': True, 'featurelayer': 'TCN', 'num_heads': 4, 'stratify': 'undersample','norm':'IN'},
                      'TCNx2': {'batch_size': 16, 'num_filters': 64, 'lr': 0.001, 'dropout': 0.2, 'droppath': 0.2,'channel_masking_rate': 0, 'kernel_f': 13,'kernel_MBA': 11, 'kernel_MBA1': 11, 'kernel_MBA2': 11, 'num_feature_layers': 7, 'blocks_MBA': 7,'blocks_MBA1': 0, 'blocks_MBA2': 0,'dilation1': True, 'dilation2': True,'encoder_bottelneck':1, 'MBA_encoder': True, 'wl1': 0.5, 'wl2': 0.5, 'wl3': 0.9, 'optim': 'RMSprop', 'pos_weight_l1': False, 'pos_weight_l2': True, 'cls_token': True, 'featurelayer': 'TCN', 'num_heads': 4, 'stratify': 'undersample','norm':'IN'},
                      '14': {'batch_size': 32, 'num_filters': 64, 'lr': 1e-4, 'dropout': 0.2, 'droppath': 0.2,'channel_masking_rate': 0, 'kernel_f': 13,'kernel_MBA': 11, 'kernel_MBA1': 11, 'kernel_MBA2': 11, 'num_feature_layers': 0, 'blocks_MBA': 7,'blocks_MBA1': 7, 'blocks_MBA2': 0,'dilation1': True, 'dilation2': True,'encoder_bottelneck':1, 'MBA_encoder': True, 'wl1': 0.5, 'wl2': 0.5, 'wl3': 0.9, 'optim': 'RMSprop', 'pos_weight_l1': False, 'pos_weight_l2': True, 'cls_token': True, 'featurelayer': 'TCN', 'num_heads': 4, 'stratify': 'undersample','norm':'GN', 'use_cls_token': True, 'add_positional_encoding': True},
-                     'param_16': {'batch_size': 32, 'num_filters': 128, 'dropout': 0.5, 'droppath': 0.3, 'kernel_f': 13, 'kernel_MBA': 9, 'num_feature_layers': 9, 'blocks_MBA': 8, 'wl1': 0.5, 'wl2': 0.9, 'wl3': 0.5, 'optim': 'RMSprop', 'pos_weight_l1': False, 'pos_weight_l2': True, 'featurelayer': 'ResNet', 'norm1': 'BN', 'norm2': 'IN', 'norm3': 'BN','lr': 0.001,'channel_masking_rate': 0,'cls_token': True, 'pooling_type': 'avg_only', 'num_heads': 4, 'stratify': 'none', 'skip_connect': True, 'skip_cross_attention': True, }
+                     'param_16': {'batch_size': 32, 'num_filters': 128, 'dropout': 0.5, 'droppath': 0.3, 'kernel_f': 13, 'kernel_MBA': 9, 'num_feature_layers': 9, 'blocks_MBA': 8, 'wl1': 0.5, 'wl2': 0.9, 'wl3': 0.5, 'optim': 'RMSprop', 'pos_weight_l1': False, 'pos_weight_l2': True, 'featurelayer': 'ResNet', 'norm1': 'BN', 'norm2': 'GN', 'norm3': 'BN','lr': 0.001,'channel_masking_rate': 0,'cls_token': True, 'pooling_type': 'avg_only', 'num_heads': 4, 'stratify': 'undersample', 'skip_connect': True, 'skip_cross_attention': True, },
+                     'param_mba_v1': {'batch_size': 32, 'num_filters': 128, 'dropout': 0.5, 'droppath': 0.3, 'kernel_f': 13, 'kernel_MBA1': 9, 'num_feature_layers': 9, 'blocks_MBA1': 8, 'wl1': 0.5, 'wl2': 0.9, 'wl3': 0.5, 'optim': 'RMSprop', 'pos_weight_l1': False, 'pos_weight_l2': True, 'featurelayer': 'ResNet', 'norm1': 'BN', 'norm2': 'GN', 'norm3': 'BN', 'lr': 0.001, 'channel_masking_rate': 0, 'cls_token': True, 'stratify': 'undersample'},
                     }
 
         resmbaunet_params_list = {
@@ -252,7 +253,7 @@ def load_optuna_pretrained_best_params(optuna_best_param_path):
         }
         # return resmbaunet_params_list['1']
         # return params_list['13_2']
-        return params_list['param_16']
+        return params_list['param_mba_v1']
 
 
 def generate_unique_random(min_val, max_val, excluded):

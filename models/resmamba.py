@@ -9,8 +9,8 @@ import numpy as np
 from mamba_ssm import Mamba
 
 from .mamba_blocks import MBA, AffineDropPath
-from .attention import AttModule_mamba, MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
-from .components import FeatureExtractor
+from .attention import AttModule_mamba, AttModule_mamba_cross, MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
+from .components import FeatureExtractor, ConvProjection
 
 # Primary ResMamba models
 
@@ -40,7 +40,23 @@ def create_mask(original_lengths, max_length,batch_size,device):
     
     return mask
 
-    
+
+class PositionalEncoding(nn.Module):
+    """Learnable sinusoidal positional encoding for 1D sequences."""
+    def __init__(self, d_model, max_len):
+        super(PositionalEncoding, self).__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0).permute(0, 2, 1)  # shape (1, d_model, L)
+        self.pe = nn.Parameter(pe, requires_grad=True)
+
+    def forward(self, x):
+        return x + self.pe[:, :, 0:x.shape[2]]
+
+
 class MBA_tsm(nn.Module):
     def __init__(self,
                  input_dim, 
@@ -997,4 +1013,154 @@ def latent_mixup(features, labels1=None, labels3=None, alpha=0.2):
         mixed_labels3 = None
     # Return original labels, permuted labels, and lambda for loss calculation
     return mixed_features, mixed_labels1, mixed_labels3, lam
+
+
+# ============================================================================
+# Output Module (production version used by MBA_v1)
+# ============================================================================
+
+class OutModule(nn.Module):
+    """
+    Output head module with norm → FC/Conv layers.
+    Used by MBA_v1 for classification (FC) and sequence labeling (Conv) heads.
+    """
+    def __init__(self, input_dim, hidden_dim, output_dim, norm, method):
+        super(OutModule, self).__init__()
+        if norm == 'GN':
+            self.norm = nn.GroupNorm(num_groups=4, num_channels=hidden_dim)
+        elif norm == 'BN':
+            self.norm = nn.BatchNorm1d(hidden_dim)
+        else:
+            self.norm = nn.InstanceNorm1d(hidden_dim, track_running_stats=False)
+
+        if method == 'FC':
+            self.fc1 = nn.Linear(input_dim, hidden_dim)
+            self.fc2 = nn.Linear(hidden_dim, hidden_dim)
+            self.fc3 = nn.Linear(hidden_dim, output_dim)
+        else:
+            self.fc1 = nn.Conv1d(input_dim, hidden_dim, 1)
+            self.fc2 = nn.Conv1d(hidden_dim, hidden_dim, 1)
+            self.fc3 = nn.Conv1d(hidden_dim, output_dim, 1)
+
+    def forward(self, x):
+        if self.norm is not None:
+            x = self.norm(x)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = F.relu(x)
+        x = self.fc3(x)
+        return x
+
+
+# ============================================================================
+# MBA_v1: Production model with U-Net skip connections
+# ============================================================================
+
+class MBA_v1(nn.Module):
+    """
+    Production Deep Scratch model: FeatureExtractor encoder with U-Net skip
+    connections to cross-attention Mamba decoder.
+
+    Architecture:
+        1. ConvProjection: input_dim → num_filters
+        2. CLS token prepended
+        3. FeatureExtractor encoder (TCN/ResNet) with intermediate feature maps
+        4. Positional encoding
+        5. Cross-attention Mamba decoder with U-Net skip connections from encoder
+        6. Three output heads:
+           - out1 (FC): binary scratch classification from CLS token
+           - out2 (Conv): per-timestep sequence labeling
+           - out3 (FC): severity/regression from CLS token
+
+    Returns 3 values: (x1, x2, x3) — unlike MBA_tsm which returns 6.
+    """
+    def __init__(self, input_dim, num_filters=64, num_encoder_layers=7,
+                 num_decoder_layers=3, drop_path_rate=0.3,
+                 kernel_size_encoder=3, kernel_size_decoder=7,
+                 dropout_rate=0.2, max_seq_len=1220,
+                 encoderlayer="TCN", norm1='IN', norm2='IN', norm3='BN'):
+        super(MBA_v1, self).__init__()
+        self.input_projection = ConvProjection(input_dim, num_filters, norm1)
+        self.cls_token = nn.Parameter(torch.randn(1, num_filters, 1))
+        self.num_encoder_layers = num_encoder_layers
+
+        self.encoder = FeatureExtractor(
+            num_filters, num_filters=num_filters,
+            kernel_size=kernel_size_encoder,
+            num_feature_layers=num_encoder_layers,
+            tsm=False, featurelayer=encoderlayer, norm=norm1
+        )
+
+        self.positional_encoding = PositionalEncoding(
+            d_model=num_filters, max_len=max_seq_len
+        )
+
+        self.decoder = nn.ModuleList([
+            AttModule_mamba_cross(
+                2 ** i, num_filters, num_filters, 1, 1,
+                'sliding_att', 'encoder', 1,
+                drop_path_rate=drop_path_rate,
+                kernel_size=kernel_size_decoder,
+                dropout_rate=dropout_rate, norm=norm2
+            )
+            for i in range(num_decoder_layers)
+        ])
+
+        self.out1 = OutModule(num_filters, num_filters, 1, norm3, 'FC')
+        self.out2 = OutModule(num_filters, num_filters, 1, norm3, 'Conv')
+        self.out3 = OutModule(num_filters, num_filters, 1, norm3, 'FC')
+
+    def forward(self, x, x_lengths, labels1=None, labels3=None,
+                apply_mixup=False, mixup_alpha=0.2):
+        batch_size, seq_len, channels = x.size()
+
+        # Create mask from sequence lengths
+        mask = create_mask(
+            torch.tensor(x_lengths, device=x.device),
+            seq_len, batch_size, x.device
+        )
+
+        # Input projection: [B, SeqLen, C] -> [B, num_filters, SeqLen]
+        x = self.input_projection(x.permute(0, 2, 1))
+
+        # Prepend CLS token
+        token = self.cls_token.expand(batch_size, -1, -1)
+        x = torch.cat((token, x), dim=2)
+        mask = torch.cat((torch.ones(batch_size, 1, device=x.device), mask), dim=1)
+
+        # Encoder with intermediate feature maps for skip connections
+        if self.num_encoder_layers > 0:
+            x, feature_maps = self.encoder(x, mask, return_intermediates=True)
+
+        # Positional encoding
+        x = self.positional_encoding(x)
+
+        # Decoder with U-Net skip connections
+        if self.num_encoder_layers > 0:
+            for i, layer in enumerate(self.decoder):
+                if i < len(feature_maps):
+                    skip_idx = len(feature_maps) - 1 - i
+                    encoder_states = feature_maps[skip_idx]
+                    x = layer(x, encoder_states, mask)
+                else:
+                    x = layer(x, None, mask)
+        else:
+            for layer in self.decoder:
+                x = layer(x, None, mask)
+
+        # Output heads
+        pooled_features = x[:, :, 0]  # CLS token
+        x1 = self.out1(pooled_features)
+        x3 = self.out3(pooled_features)
+        x2 = self.out2(x[:, :, 1:])  # Sequence output (excluding CLS)
+
+        # Apply mask to sequence output
+        mask = mask[:, 1:].reshape(-1).bool()
+        x2 = x2.view(-1)
+        x2 = x2[mask]
+
+        # Return 6 values for compatibility with train_scratch.py run_model()
+        # att=None, contrastive_embedding=None, mixup_info=None
+        return x1, x2, x3, None, None, None
 

@@ -23,7 +23,7 @@ from .attention import (
     MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 )
 from .components import FeatureExtractor, FeatureExtractorConv2d, FeatureExtractorForPretraining
-from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, latent_mixup, masked_avg_pool, create_mask
+from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, MBA_v1, latent_mixup, masked_avg_pool, create_mask
 from .encoder_decoder import (
     MBA_encoder_decoder,
     MBA_tsm_encoder_decoder_ch_bottleneck,
@@ -168,6 +168,29 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                             norm3=norm3,
                             pooling_type=pooling_type,
                             )
+        case "mbav1":
+            dropout_rate = best_params['dropout']
+            drop_path_rate = best_params['droppath']
+            kernel_size_encoder = best_params["kernel_f"]
+            kernel_size_decoder = best_params["kernel_MBA1"]
+            num_decoder_layers = best_params["blocks_MBA1"]
+            num_encoder_layers = best_params["num_feature_layers"]
+            featurelayer = best_params["featurelayer"]
+            num_filters = best_params['num_filters']
+            norm1 = best_params['norm1']
+            norm2 = best_params['norm2']
+            norm3 = best_params['norm3']
+            model = MBA_v1(input_tensor_size,
+                           num_encoder_layers=num_encoder_layers,
+                           num_decoder_layers=num_decoder_layers,
+                           drop_path_rate=drop_path_rate,
+                           kernel_size_encoder=kernel_size_encoder,
+                           kernel_size_decoder=kernel_size_decoder,
+                           dropout_rate=dropout_rate,
+                           max_seq_len=max_seq_len,
+                           num_filters=num_filters,
+                           encoderlayer=featurelayer,
+                           norm1=norm1, norm2=norm2, norm3=norm3)
         case "mba_padding":
             dropout_rate = best_params['dropout']
             drop_path_rate = best_params['droppath']

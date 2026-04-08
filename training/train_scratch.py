@@ -23,10 +23,11 @@ import argparse
 # Parse Arguments
 # ---------------
 parser = argparse.ArgumentParser(description='Run Predictive Modeling Pipeline.')
-parser.add_argument('--input_data_folder', type=str, required=True, help='Path to the input data file')
+parser.add_argument('--config', type=str, required=False, default="", help='Path to YAML config file. When provided, config values override defaults but CLI args still take precedence.')
+parser.add_argument('--input_data_folder', type=str, default=None, help='Path to the input data file')
 parser.add_argument('--clear_tracker', type=bool, default=False, required=False, help='Clear Job Tracking Folder')
-parser.add_argument('--model', type=str, default="MLP", required=True, help='Define the model to be used')
-parser.add_argument('--output', type=str, required=True, help='Define the name of the output folder')
+parser.add_argument('--model', type=str, default=None, help='Define the model to be used')
+parser.add_argument('--output', type=str, default=None, help='Define the name of the output folder')
 parser.add_argument('--execution_mode', type=str, default="train", required=False, help='Define if the script should train or tune the model')
 parser.add_argument('--features_type', type=str, default="raw", required=False, help='Select (raw/hand_crafted) features.')
 parser.add_argument('--motion_filter', type=bool, default=True, required=False, help='Motion Filter')
@@ -45,11 +46,54 @@ parser.add_argument("--freeze_encoder",type=str,default="False", required=False,
 parser.add_argument('--scaler_path', type=str, default="", required=False, help='Path to the saved scaler. If not provided, a new scaler will be fitted.')
 
 
-# parser.add_argument('--list_features', type=int, default=5, required=False, help='Selected list features.')
-# parser.add_argument('--multi_channel', type=bool, default=False, required=False, help='1D / multi channel data.')
-
-
 args = parser.parse_args()
+
+# ---------------
+# YAML Config Loading (--config flag)
+# ---------------
+# Priority: CLI args > YAML config > argparse defaults
+if args.config:
+    import yaml
+    with open(args.config, 'r') as f:
+        cfg = yaml.safe_load(f)
+
+    # Flatten nested YAML into a mapping to argparse args
+    yaml_to_args = {
+        # data section
+        'input_data_folder': cfg.get('data', {}).get('input_folder'),
+        'features_type':     cfg.get('data', {}).get('format'),
+        'scaler_path':       cfg.get('data', {}).get('scaler_path'),
+        # model section
+        'model':             cfg.get('model', {}).get('architecture'),
+        # training section
+        'output':            cfg.get('training', {}).get('output'),
+        'execution_mode':    cfg.get('training', {}).get('execution_mode'),
+        'epochs':            cfg.get('training', {}).get('epochs'),
+        'num_gpu':           cfg.get('training', {}).get('num_gpu'),
+        'clear_tracker':     cfg.get('training', {}).get('clear_tracker'),
+        'data_augmentation': cfg.get('training', {}).get('data_augmentation'),
+        # transfer_learning section
+        'pretrained_model_path': cfg.get('transfer_learning', {}).get('pretrained_model_path'),
+        'freeze_encoder':        cfg.get('transfer_learning', {}).get('freeze_encoder'),
+    }
+
+    # Apply YAML values where CLI didn't explicitly override
+    for key, yaml_val in yaml_to_args.items():
+        if yaml_val is not None:
+            current = getattr(args, key, None)
+            # Only override if the arg is still at its default (None or argparse default)
+            if current is None or (key == 'num_gpu' and current == 'NA'):
+                setattr(args, key, yaml_val)
+
+    print(f"Loaded config from: {args.config}")
+
+# Validate required args
+if not args.input_data_folder:
+    parser.error("--input_data_folder is required (or set data.input_folder in YAML config)")
+if not args.model:
+    parser.error("--model is required (or set model.architecture in YAML config)")
+if not args.output:
+    parser.error("--output is required (or set training.output in YAML config)")
 
 
 scaler_path = "/domino/datasets/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"

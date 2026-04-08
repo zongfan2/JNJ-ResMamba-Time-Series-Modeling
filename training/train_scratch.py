@@ -96,7 +96,7 @@ if not args.output:
     parser.error("--output is required (or set training.output in YAML config)")
 
 
-scaler_path = "/domino/datasets/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
+scaler_path = args.scaler_path if args.scaler_path else "/mnt/code/munge/predictive_modeling/std_scaler_3s.bin"
 pre_saved_scaler = joblib.load(scaler_path)
 
 # os.environ["CUDA_VISIBLE_DEVICES"]=num_gpu

@@ -500,14 +500,16 @@ def run_model(model,df,batch_size,train_mode,device,optimizer,scheduler,stratify
                                        "pr1_probs": pr1_probs,
                                        "pr3": pr3s})
 
-            predictions2=pd.DataFrame({"segment":segments2,
-                                       "position":positions, 
+            pred2_dict = {"segment":segments2,
+                                       "position":positions,
                                        "inTSO":inTSOs,
                                        "predictTSO":predictTSOs,
                                        "gt2": gt2s,
                                        "pr2": pr2s,
-                                       "pr2_probs": pr2_probs,
-                                      "attentions":attentions})
+                                       "pr2_probs": pr2_probs}
+            if len(attentions) == len(segments2):
+                pred2_dict["attentions"] = attentions
+            predictions2=pd.DataFrame(pred2_dict)
 
             predictions=predictions2.merge(predictions1)
         else:

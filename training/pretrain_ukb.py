@@ -64,7 +64,7 @@ if _PROJECT_ROOT not in sys.path:
 
 from models.resmamba import MBA_v1_ForPretraining
 from models.setup import setup_model
-from models.pretraining import DINOPretrainer
+from models.pretrainer import DINOPretrainer
 from data.loading_ukb_h5 import load_ukb_pretrain_h5
 from data.padding import add_padding_pretrain
 from data.batching import batch_generator, get_nb_steps

@@ -7,6 +7,7 @@ Split from DL_helpers.py - Modular code structure
 import numpy as np
 import pandas as pd
 import torch
+from torch.nn.utils.rnn import pad_sequence
 
 def add_padding(batch,device,seg_column='segment', max_seq_len=None, random_start=False, padding_value=0.0):
     X_sequences=[]

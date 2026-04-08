@@ -5,6 +5,14 @@ Created on Tue Sep 24 11:19:50 2024
 @author: MBoukhec
 """
 import subprocess
+import sys
+import os
+
+# Add project root to sys.path so that data/, models/, etc. are importable
+# regardless of which directory the script is launched from.
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import joblib
 

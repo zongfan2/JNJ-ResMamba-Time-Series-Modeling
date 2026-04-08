@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 from typing import Optional, Tuple
 import numpy as np
+from .baselines import TCNLayer, ResTCNLayer
 
 
 # Shared TCN and feature extraction components

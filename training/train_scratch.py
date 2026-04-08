@@ -446,7 +446,8 @@ def run_model(model,df,batch_size,train_mode,device,optimizer,scheduler,stratify
 
             pr2s=np.concatenate((pr2s,pr2))
             pr2_probs=np.concatenate((pr2_probs,pr2_prob.cpu().detach().numpy()))
-            attentions=np.concatenate((attentions,att.cpu().detach().numpy()))
+            if att is not None:
+                attentions=np.concatenate((attentions,att.cpu().detach().numpy()))
     #         pr2s_2=np.concatenate((pr2s_2, seq_to_seconds(pr2,y_lens)))
     #         pr2s_3=np.concatenate((pr2s_3,seq_to_seconds(smooth_binary_series(pr2,20,20),y_lens)))
 

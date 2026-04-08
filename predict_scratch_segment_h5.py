@@ -57,7 +57,7 @@ args = parser.parse_args()
 
 
 # scaler_path = "/mnt/data/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
-scaler_path = "/domino/datasets/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
+scaler_path = "/mnt/data/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
 pre_saved_scaler = joblib.load(scaler_path)
 
 # os.environ["CUDA_VISIBLE_DEVICES"]=num_gpu
@@ -585,7 +585,7 @@ def train_pipeline(args):
     else:
         dataset_type = os.path.basename(input_data_folder.rstrip("/"))
     # results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{dataset_type}/{results_folder_name}/"
-    results_folder = f"/domino/datasets/GENEActive-featurized/results/DL/{dataset_type}/{results_folder_name}/"
+    results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{dataset_type}/{results_folder_name}/"
     if tune_path=="":
         param_tuning_output_folder = os.path.join(results_folder, "tuning/")
     else:
@@ -1183,7 +1183,7 @@ def tune_pipeline(args):
     data_augmentation=args.data_augmentation
     dataset_type = os.path.basename(input_data_folder.rstrip("/"))
     # results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{dataset_type}/{results_folder_name}/"
-    results_folder = f"/domino/datasets/GENEActive-featurized/results/DL/{dataset_type}/{results_folder_name}/"
+    results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{dataset_type}/{results_folder_name}/"
     param_tuning_output_folder = os.path.join(results_folder, "tuning/")
     param_tuning_output_trials = os.path.join(param_tuning_output_folder, "trials/")
     create_folder([param_tuning_output_folder,param_tuning_output_trials])
@@ -1291,7 +1291,7 @@ def tune_pipeline(args):
 # results_folder_name = "test_model_rnn"
 # list_features = 4
 # multi_channel = False
-# scaler_path = "/domino/datasets/GENEActive-featurized-consolidated/results/leave-1-out-cv/time_windows_results_2s_1s/standard_scaler_2s.joblib"
+# scaler_path = "/mnt/data/GENEActive-featurized-consolidated/results/leave-1-out-cv/time_windows_results_2s_1s/standard_scaler_2s.joblib"
 # pre_saved_scaler = joblib.load(scaler_path)
 
 

@@ -441,7 +441,7 @@ class ViT1D(nn.Module):
                 nn.init.constant_(m.weight, 1.0)
     
     def _load_pretrained_weights(self):
-        pretrained_weights = "/domino/datasets/GENEActive-featurized/results/DL/geneactive_20hz_2s_b1s_imerit_sleep_nonwearOR_5smerge_nograv_change/ns_detect-lsm2-aim-pretrain/training/model_weights/vit1d_test_subject_FOLD4_weights.pth"
+        pretrained_weights = "/mnt/data/GENEActive-featurized/results/DL/geneactive_20hz_2s_b1s_imerit_sleep_nonwearOR_5smerge_nograv_change/ns_detect-lsm2-aim-pretrain/training/model_weights/vit1d_test_subject_FOLD4_weights.pth"
         
 
 

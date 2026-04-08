@@ -11,7 +11,7 @@
 set -euo pipefail
 
 ROOT_DIR="/mnt/code/munge/predictive_modeling/code/JNJ-ResMamba-Time-Series-Modeling"
-CONFIG="${1:-${ROOT_DIR}/experiments/configs/scratch_mbatsm_deeptso.yaml}"
+CONFIG="${1:-${ROOT_DIR}/experiments/configs/scratch_mbav1_deepscratch.yaml}"
 shift 2>/dev/null || true  # consume config arg, pass remaining to train_scratch.py
 
 echo "============================================"

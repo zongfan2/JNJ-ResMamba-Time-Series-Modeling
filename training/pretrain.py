@@ -56,7 +56,7 @@ args = parser.parse_args()
 
 
 # scaler_path = "/mnt/data/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
-scaler_path = "/domino/datasets/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
+scaler_path = "/mnt/data/GENEActive-featurized/results/DL/time_windows_results_3s_1s/std_scaler_3s.bin"
 pre_saved_scaler = joblib.load(scaler_path)
 
 # os.environ["CUDA_VISIBLE_DEVICES"]=num_gpu
@@ -486,8 +486,8 @@ def train_pipeline(args):
     pretrained_weights_path=args.pretrained_weights_path
     
     dataset_name = os.path.basename(input_data_folder.rstrip("/raw"))
-    results_folder = f"/domino/datasets/GENEActive-featurized/results/DL/{dataset_name}/{results_folder_name}/"
-    # results_folder = f"/domino/datasets/GENEActive-featurized/results/DL/{dataset_name}/{results_folder_name}/"
+    results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/{results_folder_name}/"
+    # results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/{results_folder_name}/"
     if tune_path=="":
         param_tuning_output_folder = os.path.join(results_folder, "tuning/")
     else:
@@ -534,7 +534,7 @@ def train_pipeline(args):
     best_params = load_optuna_pretrained_best_params(optuna_best_param_path=param_tuning_output_folder)  # check params
     print("Best params selected: ", best_params)
     
-    # input_data_folder ='/domino/datasets/Nocturnal-scratch/geneactive_20hz_3s_b1s_production/raw'
+    # input_data_folder ='/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production/raw'
     # dataset_name = os.path.basename(input_data_folder.rstrip("/raw"))
     # processed_data_folder= os.path.join(input_data_folder.rstrip("/raw"), "processed/")
     energy_threshold=5

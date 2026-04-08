@@ -149,7 +149,14 @@ def process_file(file_path, scaler=None, min_samples=100, max_samples=0,
 
         # Apply scaler if provided
         if scaler is not None:
-            xyz = scaler.transform(xyz)
+            # Check if scaler expects 3 features (raw xyz) or more (hand-crafted)
+            n_features = getattr(scaler, 'n_features_in_', None) or len(scaler.mean_)
+            if n_features == 3:
+                xyz = scaler.transform(xyz)
+            else:
+                # Scaler was fitted on hand-crafted features, not raw xyz.
+                # Fall back to per-segment z-normalization.
+                pass
 
         segments.append({
             'segment': str(seg_name),

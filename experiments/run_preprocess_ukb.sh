@@ -11,8 +11,7 @@ ROOT_DIR="/mnt/code/munge/predictive_modeling/code/JNJ-ResMamba-Time-Series-Mode
 
 python3.11 "${ROOT_DIR}/data/preprocess_ukb_h5.py" \
     --input_folder /mnt/imported/data/NocturnalScratch_Analysis/UKB_v2/raw/ \
-    --output_h5 /mnt/data/UKB_pretrain/ukb_pretrain_20hz.h5 \
-    --scaler_path /mnt/code/munge/predictive_modeling/std_scaler_3s.bin \
+    --output_h5 /mnt/data/GENEActive-featurized/results/DL/UKB_v2/ukb_pretrain_20hz.h5 \
     --min_segment_samples 100 \
     --filter_nonwear \
     --filter_stationary \

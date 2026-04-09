@@ -256,7 +256,7 @@ def contrastive_pretrain_epoch(pretrainer, df, batch_size, train_mode, device,
 
         # Forward with optional AMP
         if use_amp and train_mode:
-            with torch.amp.autocast('cuda'):
+            with torch.cuda.amp.autocast():
                 res = pretrainer(batch_data, x_lens)
                 loss = res["loss"]
         else:
@@ -490,7 +490,7 @@ def main():
           f"{total_steps} total steps")
 
     # ----- AMP scaler -----
-    amp_scaler = torch.amp.GradScaler('cuda') if use_amp else None
+    amp_scaler = torch.cuda.amp.GradScaler() if use_amp else None
 
     # ----- Output dirs -----
     output_dir = args.output_dir

@@ -65,6 +65,7 @@ if _PROJECT_ROOT not in sys.path:
 from models.resmamba import MBA_v1_ForPretraining
 from models.setup import setup_model
 from models.pretrainer import DINOPretrainer
+from models.dataparallel_pretrainer import DataParallelDINOPretrainer
 from data.loading_ukb_h5 import load_ukb_pretrain_h5
 from data.padding import add_padding_pretrain
 from data.batching import batch_generator, get_nb_steps
@@ -332,15 +333,17 @@ def load_pretrained_encoder_into_mbav1(mbav1_model, pretrain_ckpt_path,
         device = torch.device('cpu')
     ckpt = torch.load(pretrain_ckpt_path, map_location=device)
 
-    # Handle full DINOPretrainer state_dict (keys start with 'student.')
+    # Handle full DINOPretrainer state_dict
+    # Keys may be 'student.module.*' (DataParallel) or 'student.*' (single-GPU)
     encoder_state = {}
-    prefix = 'student.'
     for key, val in ckpt.items():
-        if key.startswith(prefix):
-            clean_key = key[len(prefix):]
-            encoder_state[clean_key] = val
+        if key.startswith('student.module.'):
+            encoder_state[key[len('student.module.'):]] = val
+        elif key.startswith('student.'):
+            encoder_state[key[len('student.'):]] = val
 
     if not encoder_state:
+        # Fallback: already a clean encoder dict (e.g. _encoder_only.pth)
         encoder_state = ckpt
 
     mbav1_keys = set(mbav1_model.state_dict().keys())
@@ -444,27 +447,53 @@ def main():
 
     # ----- Wrap in pretrainer -----
     num_filters = best_params['num_filters']
+
+    # Scale batch size for multi-GPU
+    effective_batch_size = args.batch_size
+    if use_dataparallel and device_ids:
+        effective_batch_size = args.batch_size * len(device_ids)
+        print(f"Multi-GPU: scaling batch size {args.batch_size} x {len(device_ids)} GPUs "
+              f"= {effective_batch_size}")
+
     if args.pretraining_method.upper() == "DINO":
-        pretrainer = DINOPretrainer(
-            base_model=base_model,
-            feature_dim=num_filters,
-            projection_dim=args.projection_dim,
-            projection_hidden=args.projection_hidden,
-            momentum=args.momentum_start,  # will be overridden per-epoch
-            temperature_student=0.1,
-            temperature_teacher=0.04,
-            center_momentum=0.9,
-            global_crops=2,
-            local_crops=4,
-        )
+        if use_dataparallel and device_ids:
+            # DataParallel DINO: splits batches across GPUs, handles teacher EMA
+            pretrainer = DataParallelDINOPretrainer(
+                base_model=base_model,
+                feature_dim=num_filters,
+                projection_dim=args.projection_dim,
+                projection_hidden=args.projection_hidden,
+                momentum=args.momentum_start,
+                temperature_student=0.1,
+                temperature_teacher=0.04,
+                center_momentum=0.9,
+                global_crops=2,
+                local_crops=4,
+                device_ids=device_ids,
+            )
+            print(f"Using DataParallelDINOPretrainer on GPUs: {device_ids}")
+        else:
+            pretrainer = DINOPretrainer(
+                base_model=base_model,
+                feature_dim=num_filters,
+                projection_dim=args.projection_dim,
+                projection_hidden=args.projection_hidden,
+                momentum=args.momentum_start,
+                temperature_student=0.1,
+                temperature_teacher=0.04,
+                center_momentum=0.9,
+                global_crops=2,
+                local_crops=4,
+            )
+            pretrainer = pretrainer.to(device)
+            print(f"Using single-GPU DINOPretrainer on {device}")
     else:
         raise ValueError(f"Unsupported pretraining method: {args.pretraining_method}")
 
-    if not use_dataparallel:
-        pretrainer = pretrainer.to(device)
     print(f"Pretrainer: {args.pretraining_method}")
     total_params = sum(p.numel() for p in pretrainer.parameters())
     print(f"  Total parameters: {total_params:,}")
+    print(f"  Effective batch size: {effective_batch_size}")
 
     # ----- Optimizer with separated weight decay -----
     param_groups = get_param_groups(pretrainer, args.weight_decay)
@@ -478,7 +507,7 @@ def main():
     else:
         optimizer = optim.AdamW(param_groups, lr=lr, betas=(0.9, 0.95))
 
-    nb_steps = get_nb_steps(df=df_train, batch_size=args.batch_size,
+    nb_steps = get_nb_steps(df=df_train, batch_size=effective_batch_size,
                             stratify=False, shuffle=True)
     print(f"Steps per epoch: {nb_steps}")
 
@@ -534,7 +563,7 @@ def main():
         # Train
         pretrainer.train()
         train_loss, train_steps = contrastive_pretrain_epoch(
-            pretrainer, df_train, args.batch_size, True, device,
+            pretrainer, df_train, effective_batch_size, True, device,
             optimizer, scheduler, max_seq_len=max_seq_len,
             gradient_clip=args.gradient_clip, scaler=amp_scaler,
         )
@@ -544,7 +573,7 @@ def main():
         with torch.no_grad():
             pretrainer.eval()
             val_loss, val_steps = contrastive_pretrain_epoch(
-                pretrainer, df_val, args.batch_size, False, device,
+                pretrainer, df_val, effective_batch_size, False, device,
                 optimizer, scheduler, max_seq_len=max_seq_len,
             )
         val_losses.append(val_loss)
@@ -588,11 +617,15 @@ def main():
     print(f"\nFinal weights saved to {final_path}")
 
     # Encoder-only weights for easy loading into MBA_v1
+    # Handle both single-GPU (student.*) and DataParallel (student.module.*) keys
     encoder_state = {}
-    prefix = 'student.'
     for key, val in pretrainer.state_dict().items():
-        if key.startswith(prefix):
-            encoder_state[key[len(prefix):]] = val
+        if key.startswith('student.module.'):
+            # DataParallel: strip 'student.module.'
+            encoder_state[key[len('student.module.'):]] = val
+        elif key.startswith('student.'):
+            # Single-GPU: strip 'student.'
+            encoder_state[key[len('student.'):]] = val
     encoder_path = os.path.join(weights_dir,
                                 f'{args.pretraining_method}_encoder_only.pth')
     torch.save(encoder_state, encoder_path)

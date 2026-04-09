@@ -429,10 +429,11 @@ def main():
     }
 
     # ----- Create base model -----
+    # +1 to account for CLS token prepended in MBA_v1_ForPretraining.forward()
     base_model = setup_model(
         model_name=args.model,
         input_tensor_size=3,
-        max_seq_len=max_seq_len,
+        max_seq_len=max_seq_len + 1,
         best_params=best_params,
         pretraining=True,
         num_classes=1,

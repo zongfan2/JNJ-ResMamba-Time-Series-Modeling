@@ -12,6 +12,7 @@
 data:
   ukb_h5_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/ukb_pretrain_20hz.h5
   max_segments: 0  # 0 = load all
+  max_seq_len: 1221  # 61s @ 20Hz, matching production
 
 # --- Model ---
 model:
@@ -20,7 +21,7 @@ model:
 
 # --- Training ---
 training:
-  batch_size: 32
+  batch_size: 64  # total batch; DataParallel splits across GPUs (64/4 = 16 per GPU)
   epochs: 100
   lr: 0.0001
   optim: AdamW

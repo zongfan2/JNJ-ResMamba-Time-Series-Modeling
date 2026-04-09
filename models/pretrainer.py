@@ -581,53 +581,31 @@ class TimeSeriesAugmentations:
     
     @staticmethod
     def apply_augmentations(x: torch.Tensor, x_lengths: list, aug_strength: float = 0.5) -> torch.Tensor:
-        """Apply a random set of augmentations with controlled strength only to non-padded areas"""
-        # Select which augmentations to apply
+        """Apply random augmentations to the batch.
+
+        All individual augmentation methods (jitter, scaling, time_shift,
+        channel_shuffle) return new tensors, so no clone is needed.
+        Augmentations are applied to the full batch in one vectorised call
+        instead of looping per sample.  Padding regions receive augmentation
+        noise too, but that is harmless because they are masked out
+        downstream.
+        """
         aug_types = ['jitter', 'scaling', 'time_shift', 'channel_shuffle']
         num_augs = random.randint(1, len(aug_types))
         selected_augs = random.sample(aug_types, num_augs)
-        
-        x_aug = x.clone()
-        
-        if x_lengths is not None:
-            # Apply augmentations only to non-padded regions
-            batch_size = x.shape[0]
-            
-            for i in range(batch_size):
-                # Get valid (non-padded) length for this sample
-                valid_length = x_lengths[i]
 
-                # Extract only valid sequence
-                valid_seq = x_aug[i, :valid_length, :].unsqueeze(0)  # [1, valid_len, channels]
-                
-                # Apply selected augmentations only to valid sequence
-                for aug in selected_augs:
-                    if aug == 'jitter':
-                        valid_seq = TimeSeriesAugmentations.jitter(valid_seq, sigma=0.05 * aug_strength)
-                    elif aug == 'scaling':
-                        valid_seq = TimeSeriesAugmentations.scaling(valid_seq, sigma=0.1 * aug_strength)
-                    elif aug == 'time_shift':
-                        valid_seq = TimeSeriesAugmentations.time_shift(valid_seq, max_shift=int(10 * aug_strength))
-                    elif aug == 'channel_shuffle':
-                        if random.random() < aug_strength:
-                            valid_seq = TimeSeriesAugmentations.channel_shuffle(valid_seq)
-                
-                # Put augmented sequence back, keep padding unchanged
-                x_aug[i, :valid_length, :] = valid_seq.squeeze(0)
-                # x_aug[i, valid_length:, :] remains as original padding
-        else:
-            # Fallback: apply augmentations to entire sequence if no x_lengths provided
-            for aug in selected_augs:
-                if aug == 'jitter':
-                    x_aug = TimeSeriesAugmentations.jitter(x_aug, sigma=0.05 * aug_strength)
-                elif aug == 'scaling':
-                    x_aug = TimeSeriesAugmentations.scaling(x_aug, sigma=0.1 * aug_strength)
-                elif aug == 'time_shift':
-                    x_aug = TimeSeriesAugmentations.time_shift(x_aug, max_shift=int(10 * aug_strength))
-                elif aug == 'channel_shuffle':
-                    if random.random() < aug_strength:
-                        x_aug = TimeSeriesAugmentations.channel_shuffle(x_aug)
-                    
+        x_aug = x  # no clone — augmentations return new tensors
+        for aug in selected_augs:
+            if aug == 'jitter':
+                x_aug = TimeSeriesAugmentations.jitter(x_aug, sigma=0.05 * aug_strength)
+            elif aug == 'scaling':
+                x_aug = TimeSeriesAugmentations.scaling(x_aug, sigma=0.1 * aug_strength)
+            elif aug == 'time_shift':
+                x_aug = TimeSeriesAugmentations.time_shift(x_aug, max_shift=int(10 * aug_strength))
+            elif aug == 'channel_shuffle':
+                if random.random() < aug_strength:
+                    x_aug = TimeSeriesAugmentations.channel_shuffle(x_aug)
+
         return x_aug
 
 

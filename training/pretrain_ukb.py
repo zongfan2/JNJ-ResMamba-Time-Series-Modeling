@@ -88,6 +88,9 @@ def parse_args():
                         help='Path to UKB H5 file (from preprocess_ukb_h5.py)')
     parser.add_argument('--max_segments', type=int, default=0,
                         help='Max segments to load (0 = all)')
+    parser.add_argument('--max_seq_len', type=int, default=1221,
+                        help='Cap sequence length for padding (default 1221 = 61s at 20Hz, '
+                             'matching production). Segments longer than this are truncated.')
     # Model
     parser.add_argument('--model', type=str, default='mbav1_pretrain',
                         help='Model architecture for pretraining')
@@ -130,8 +133,13 @@ def parse_args():
     return parser.parse_args()
 
 
-def merge_yaml_config(args):
-    """Merge YAML config into args, with CLI taking precedence."""
+def merge_yaml_config(args, raw_cli_args=None):
+    """Merge YAML config into args.
+
+    Priority: CLI explicitly provided > YAML > argparse defaults.
+    We compare against argparse defaults to detect which args the user
+    actually typed on the command line vs. left at their default.
+    """
     if not args.config or not os.path.exists(args.config):
         return args
     with open(args.config, 'r') as f:
@@ -143,11 +151,19 @@ def merge_yaml_config(args):
             flat.update(val)
         else:
             flat[key] = val
+
+    # Build set of arg names that the user explicitly passed on the CLI
+    cli_provided = set()
+    if raw_cli_args is not None:
+        for tok in raw_cli_args:
+            if tok.startswith('--'):
+                cli_provided.add(tok.lstrip('-').replace('-', '_'))
+
     for key, val in flat.items():
         key_under = key.replace('-', '_')
         if hasattr(args, key_under):
-            current = getattr(args, key_under)
-            if current is None or current == '' or current == 0:
+            # Only skip override if the user explicitly typed this arg on CLI
+            if key_under not in cli_provided:
                 setattr(args, key_under, val)
     return args
 
@@ -363,7 +379,7 @@ def load_pretrained_encoder_into_mbav1(mbav1_model, pretrain_ckpt_path,
 
 def main():
     args = parse_args()
-    args = merge_yaml_config(args)
+    args = merge_yaml_config(args, raw_cli_args=sys.argv[1:])
 
     use_amp = str(args.use_amp).lower() == 'true'
 
@@ -397,8 +413,18 @@ def main():
     df.loc[:, cols] = scaler_data.fit_transform(df[cols])
     print(f"Applied StandardScaler to {cols}")
 
-    max_seq_len = int(df.groupby('segment').size().max()) + 1
-    print(f"Max segment length: {max_seq_len}")
+    data_max_len = int(df.groupby('segment').size().max()) + 1
+    max_seq_len = min(data_max_len, args.max_seq_len)
+    print(f"Max segment length in data: {data_max_len}")
+    print(f"Capped max_seq_len: {max_seq_len}")
+
+    # Truncate segments longer than max_seq_len
+    if data_max_len > max_seq_len:
+        seg_lens = df.groupby('segment').cumcount()
+        before = len(df)
+        df = df[seg_lens < max_seq_len]
+        print(f"  Truncated: {before:,} → {len(df):,} samples "
+              f"(removed {before - len(df):,} samples from long segments)")
 
     # Train / val split (90/10 by segment)
     from sklearn.model_selection import train_test_split
@@ -448,12 +474,13 @@ def main():
     # ----- Wrap in pretrainer -----
     num_filters = best_params['num_filters']
 
-    # Scale batch size for multi-GPU
+    # With DataParallel, the batch is split across GPUs automatically.
+    # batch_size here is the TOTAL batch fed in; each GPU gets batch_size/N.
+    # User should set a larger --batch_size when using multiple GPUs.
     effective_batch_size = args.batch_size
     if use_dataparallel and device_ids:
-        effective_batch_size = args.batch_size * len(device_ids)
-        print(f"Multi-GPU: scaling batch size {args.batch_size} x {len(device_ids)} GPUs "
-              f"= {effective_batch_size}")
+        print(f"Multi-GPU ({len(device_ids)} GPUs): total batch={effective_batch_size}, "
+              f"per-GPU={effective_batch_size // len(device_ids)}")
 
     if args.pretraining_method.upper() == "DINO":
         if use_dataparallel and device_ids:

@@ -183,11 +183,11 @@ def add_padding_pretrain(batch,device,seg_column='segment',mask_rate=0.3, max_se
         # xyz_p=np.random.permutation(['x','y','z'])
         # seq=seq.rename(columns={'x': xyz_p[0], 'y': xyz_p[1], 'z': xyz_p[2]})
         X_arr=seq.loc[:, ['x', 'y', 'z']].to_numpy()
-        # X_arr=seq.loc[:, ['x', 'y', 'z','angle']].to_numpy()
-        # Y_arr=np.array([seq['scratch'].values]).T
-        X_sequences.append(torch.tensor(X_arr,dtype=torch.float32,device=device))#,device=device
-        # Y_sequences.append(torch.tensor(Y_arr,dtype=torch.long,device=device))#,device=device
-        # Y_sequences=np.concatenate((Y_sequences,seq['scratch'].values))
+        # Hard clip: truncate segment to max_seq_len BEFORE tensor creation
+        # to prevent pad_sequence from allocating a massive tensor on GPU.
+        if max_seq_len is not None and len(X_arr) > max_seq_len:
+            X_arr = X_arr[:max_seq_len]
+        X_sequences.append(torch.tensor(X_arr,dtype=torch.float32,device=device))
         x_lens.append(len(X_arr))
         # label1.append(seq['segment_scratch'].any()*1)
         # label3.append(seq['scratch_duration'].max())

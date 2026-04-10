@@ -11,7 +11,7 @@
 # --- Data ---
 data:
   ukb_h5_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/ukb_pretrain_20hz.h5
-  max_segments: 200000  # 200K segments — enough diversity for DINO, ~6.5x faster
+  max_segments: 0  # 0 = all 1.3M segments (~48 GB DataFrame, fits in 156 GB RAM)
   max_seq_len: 1221  # 61s @ 20Hz, matching production
 
 # --- Model ---
@@ -21,9 +21,9 @@ model:
 
 # --- Training ---
 training:
-  batch_size: 256  # total batch; DataParallel splits across GPUs (256/4 = 64 per GPU)
-  epochs: 50
-  lr: 0.0003  # scale with sqrt(256/32) ≈ 2.8x from 0.0001
+  batch_size: 512  # total batch; DataParallel splits across GPUs (512/4 = 128 per GPU)
+  epochs: 30  # 1.3M segments × 30 epochs = 39M views — plenty for DINO
+  lr: 0.0004  # scale with sqrt(512/32) ≈ 4x from 0.0001
   optim: AdamW
   weight_decay: 0.04
   warmup_epochs: 5

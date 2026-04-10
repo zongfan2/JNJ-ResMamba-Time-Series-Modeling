@@ -58,6 +58,26 @@ def load_ukb_pretrain_h5(file_path, max_segments=0):
         total_samples = int(lengths.sum())
         print(f"  Total samples: {total_samples:,}")
 
+        # --- Length statistics (sanity check before training) ---
+        print("  Segment length statistics:")
+        print(f"    min:    {int(lengths.min()):,}")
+        print(f"    max:    {int(lengths.max()):,}")
+        print(f"    mean:   {lengths.mean():,.1f}")
+        print(f"    median: {int(np.median(lengths)):,}")
+        print(f"    std:    {lengths.std():,.1f}")
+        for p in (50, 75, 90, 95, 99, 99.9):
+            print(f"    p{p:>4}:  {int(np.percentile(lengths, p)):,}")
+        # How many segments would be truncated at the production cap (1221)?
+        prod_cap = 1221
+        n_over = int((lengths > prod_cap).sum())
+        pct_over = 100.0 * n_over / total
+        print(f"    segments > {prod_cap}: {n_over:,} ({pct_over:.2f}%)")
+        # Flag suspiciously huge segments — these caused the earlier OOMs.
+        n_huge = int((lengths > 100_000).sum())
+        if n_huge > 0:
+            print(f"    WARNING: {n_huge:,} segments exceed 100K samples "
+                  f"(longest = {int(lengths.max()):,})")
+
         # --- Pre-allocate arrays ---
         x_arr = np.empty(total_samples, dtype=np.float32)
         y_arr = np.empty(total_samples, dtype=np.float32)

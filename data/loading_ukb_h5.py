@@ -265,13 +265,42 @@ class UKBPretrainDataset(Dataset):
         self.max_seq_len = max_seq_len
         self.dtype = dtype
 
-        # Sanity-check the scaler shape once, cheaply.
+        # Pre-extract mean / scale as plain numpy arrays.
+        #
+        # Why: sklearn's StandardScaler.transform() does a full input
+        # validation pass on every call (dtype check, NaN check, feature-
+        # name check, etc.), and when it was fitted on a pandas DataFrame
+        # it emits a "X does not have valid feature names" warning every
+        # time it's called with a numpy array. Over 1.3M segments per
+        # epoch that is real CPU waste AND log noise. Since StandardScaler
+        # is just ``(x - mean) / scale`` at the end of the day, we capture
+        # those two vectors once in __init__ and do the math directly in
+        # __getitem__.
+        self._scaler_mean: Optional[np.ndarray] = None
+        self._scaler_scale: Optional[np.ndarray] = None
         if scaler is not None:
             n_expected = getattr(scaler, 'n_features_in_', None)
             if n_expected is not None and n_expected != 3:
                 raise ValueError(
                     f"UKB pretraining uses 3 channels (x, y, z) but scaler "
                     f"was fitted on {n_expected} features."
+                )
+            if not (hasattr(scaler, 'mean_') and hasattr(scaler, 'scale_')):
+                raise ValueError(
+                    "Scaler is missing .mean_ / .scale_ attributes — is it "
+                    "a fitted sklearn StandardScaler?"
+                )
+            self._scaler_mean = np.asarray(
+                scaler.mean_, dtype=self.dtype
+            ).reshape(1, 3)
+            self._scaler_scale = np.asarray(
+                scaler.scale_, dtype=self.dtype
+            ).reshape(1, 3)
+            # Guard against zero-variance channels to avoid div-by-zero.
+            if np.any(self._scaler_scale == 0):
+                raise ValueError(
+                    f"Scaler has zero scale on one or more channels: "
+                    f"{scaler.scale_}. Cannot apply."
                 )
 
         if verbose:
@@ -374,9 +403,12 @@ class UKBPretrainDataset(Dataset):
         if self.max_seq_len is not None and arr.shape[0] > self.max_seq_len:
             arr = arr[: self.max_seq_len]
 
-        if self.scaler is not None:
-            # StandardScaler.transform expects 2-D; arr is already [L, 3].
-            arr = self.scaler.transform(arr).astype(self.dtype, copy=False)
+        if self._scaler_mean is not None:
+            # Direct (x - mean) / scale. Broadcasts [L, 3] over [1, 3].
+            # Faster than scaler.transform() and avoids sklearn's
+            # "X does not have valid feature names" warning when the
+            # scaler was fitted on a pandas DataFrame.
+            arr = (arr - self._scaler_mean) / self._scaler_scale
 
         return torch.from_numpy(arr)
 

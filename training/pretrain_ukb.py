@@ -419,14 +419,14 @@ def main():
     df.loc[:, cols] = scaler_data.fit_transform(df[cols])
     print(f"Applied StandardScaler to {cols}")
 
-    data_max_len = int(df.groupby('segment').size().max()) + 1
+    data_max_len = int(df.groupby('segment', observed=True).size().max()) + 1
     max_seq_len = min(data_max_len, args.max_seq_len)
     print(f"Max segment length in data: {data_max_len}")
     print(f"Capped max_seq_len: {max_seq_len}")
 
     # Truncate segments longer than max_seq_len
     if data_max_len > max_seq_len:
-        seg_lens = df.groupby('segment').cumcount()
+        seg_lens = df.groupby('segment', observed=True).cumcount()
         before = len(df)
         df = df[seg_lens < max_seq_len]
         print(f"  Truncated: {before:,} → {len(df):,} samples "

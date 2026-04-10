@@ -19,7 +19,7 @@ def add_padding(batch,device,seg_column='segment', max_seq_len=None, random_star
         max_seq_template = torch.ones(max_seq_len, 3).to(device)
         X_sequences.append(max_seq_template)
         # x_lens.append(max_seq_len)
-    for index,seq in batch.groupby(seg_column, sort=False):
+    for index,seq in batch.groupby(seg_column, sort=False, observed=True):
         # X_arr=seq.loc[:, ['x', 'y', 'z','angle','wrist','position_segment','position_segmentr','position_TSO','position_TSOr', *seq.loc[:, 'stft_0':'stft_32'].columns]].to_numpy()
         # X_arr=seq.loc[:, ['x', 'y', 'z','angle','position_segment','position_segmentr','position_TSO','position_TSOr']].to_numpy()
         # X_arr=seq.loc[:, ['x', 'y', 'z','angle']].to_numpy()
@@ -88,7 +88,7 @@ def add_padding_with_position(
     
     # First pass: collect all sequences and their lengths to determine max_seq_len if not provided
     sequences_data = []
-    for _, seq in batch.groupby(seg_column, sort=False):
+    for _, seq in batch.groupby(seg_column, sort=False, observed=True):
         # Randomly permute x/y/z columns
         # TODO: disabled if position embedding is included
         xyz_p = np.random.permutation(['x', 'y'])
@@ -173,7 +173,7 @@ def add_padding_pretrain(batch,device,seg_column='segment',mask_rate=0.3, max_se
         max_seq_template = torch.ones(max_seq_len, 3).to(device)
         X_sequences.append(max_seq_template)
         # x_lens.append(max_seq_len)
-    for index,seq in batch.groupby(seg_column, sort=False):
+    for index,seq in batch.groupby(seg_column, sort=False, observed=True):
         # X_arr=seq.loc[:, ['x', 'y', 'z','angle','wrist','position_segment','position_segmentr','position_TSO','position_TSOr', *seq.loc[:, 'stft_0':'stft_32'].columns]].to_numpy()
         # X_arr=seq.loc[:, ['x', 'y', 'z','angle','position_segment','position_segmentr','position_TSO','position_TSOr']].to_numpy()
         # X_arr=seq.loc[:, ['x', 'y', 'z','angle']].to_numpy()
@@ -247,7 +247,7 @@ def add_padding_TSO(batch, device, seg_column='segment', max_seq_len=None, paddi
         X_sequences.append(max_seq_template_X)
         Y_sequences.append(max_seq_template_Y)
 
-    for index, seq in batch.groupby(seg_column, sort=False):
+    for index, seq in batch.groupby(seg_column, sort=False, observed=True):
         # Filter to only include minute_id < max_seq_len (first 24 hours) and sort by minute_id
         # if 'minute_id' in seq.columns and max_seq_len is not None:
         #     seq = seq[seq['minute_id'] < max_seq_len].sort_values('minute_id')
@@ -403,7 +403,7 @@ def add_padding_tso_patch(batch, device, seg_column='segment', max_seq_len=1440,
         X_sequences.append(max_seq_template_X)
         Y_sequences.append(max_seq_template_Y)
 
-    for _, seg_metadata in batch.groupby(seg_column, sort=False):
+    for _, seg_metadata in batch.groupby(seg_column, sort=False, observed=True):
         # Load raw data on-demand from cache_file
         if 'cache_file' in seg_metadata.columns:
             # Lazy loading mode: load from cache file

@@ -35,6 +35,189 @@ from torch.utils.data import Dataset
 
 
 # ---------------------------------------------------------------------------
+# Length-index cache
+# ---------------------------------------------------------------------------
+#
+# Pass 1 of the old loader did 1.3M HDF5 metadata ops (group lookup + dataset
+# open + shape read). On networked Domino storage that's 10+ minutes. The
+# result never changes until the H5 is re-preprocessed, so we cache it.
+#
+# Three tiers, in order of preference:
+#
+#   1. ``/metadata/segment_lengths`` — a 1-D int64 dataset inside the H5
+#      itself. Populated by ``bake_ukb_length_index_into_h5`` (one-shot).
+#      Loading it is a single HDF5 read — effectively free.
+#
+#   2. Sidecar ``<h5_path>.lengths.npz`` — a numpy archive next to the H5
+#      that stores ``lengths`` plus the H5's mtime at scan time for cache
+#      invalidation. Written automatically the first time tier 3 runs.
+#
+#   3. Full scan. Slow, but runs at most once per H5 file. Afterwards the
+#      sidecar takes over until the H5 is rewritten.
+#
+# All three tiers return an int64 array of length ``len(f['segments'])``
+# covering EVERY segment in the file. The ``indices`` subset passed to
+# ``UKBPretrainDataset.__init__`` is applied afterwards as a cheap slice.
+
+
+def _sidecar_cache_path(h5_path: str) -> str:
+    return h5_path + ".lengths.npz"
+
+
+def _scan_segment_lengths(h5_file: h5py.File, verbose: bool = True) -> np.ndarray:
+    """Brute-force scan: open every segment group and read its length."""
+    segs_group = h5_file['segments']
+    n = len(segs_group)
+    lengths = np.empty(n, dtype=np.int64)
+    if verbose:
+        print(f"  scanning {n:,} segment lengths (first-run only)...")
+    start = datetime.now()
+    for i in range(n):
+        lengths[i] = segs_group[str(i)]['x'].shape[0]
+        if verbose and (i + 1) % 100_000 == 0:
+            elapsed = (datetime.now() - start).total_seconds()
+            rate = (i + 1) / max(elapsed, 1e-6)
+            eta = (n - (i + 1)) / max(rate, 1e-6)
+            print(f"    scanned {i + 1:,}/{n:,} "
+                  f"({rate:,.0f} seg/s, ETA {eta:.0f}s)")
+    if verbose:
+        elapsed = (datetime.now() - start).total_seconds()
+        print(f"  scan complete in {elapsed:.1f}s")
+    return lengths
+
+
+def _load_or_build_length_index(h5_path: str,
+                                verbose: bool = True) -> tuple:
+    """Return ``(lengths, source)`` for ALL segments in ``h5_path``.
+
+    ``source`` is one of ``"h5-embedded"``, ``"sidecar-cache"``, or
+    ``"scan"`` — purely informational so logs make the cache tier visible.
+    """
+    # Tier 1: embedded dataset inside the H5.
+    try:
+        with h5py.File(h5_path, 'r') as f:
+            if 'metadata' in f and 'segment_lengths' in f['metadata']:
+                lengths = np.asarray(f['metadata/segment_lengths'][()],
+                                     dtype=np.int64)
+                if verbose:
+                    print(f"  length index loaded from "
+                          f"/metadata/segment_lengths ({len(lengths):,} entries)")
+                return lengths, "h5-embedded"
+    except Exception as e:
+        if verbose:
+            print(f"  WARNING: could not probe embedded index: {e}")
+
+    # Tier 2: sidecar .npz cache.
+    cache_path = _sidecar_cache_path(h5_path)
+    if os.path.exists(cache_path):
+        try:
+            h5_mtime = os.path.getmtime(h5_path)
+            with np.load(cache_path) as cache:
+                cached_mtime = float(cache['h5_mtime'][0])
+                lengths = np.asarray(cache['lengths'], dtype=np.int64)
+            if abs(cached_mtime - h5_mtime) < 1.0:
+                if verbose:
+                    print(f"  length index loaded from sidecar cache "
+                          f"{cache_path} ({len(lengths):,} entries)")
+                return lengths, "sidecar-cache"
+            elif verbose:
+                print(
+                    f"  sidecar cache {cache_path} is stale "
+                    f"(h5 mtime {h5_mtime:.0f} vs cached {cached_mtime:.0f}); "
+                    f"rescanning"
+                )
+        except Exception as e:
+            if verbose:
+                print(f"  WARNING: sidecar cache unreadable ({e}); rescanning")
+
+    # Tier 3: scan and write sidecar.
+    with h5py.File(h5_path, 'r') as f:
+        lengths = _scan_segment_lengths(f, verbose=verbose)
+
+    try:
+        h5_mtime = os.path.getmtime(h5_path)
+        np.savez(cache_path,
+                 lengths=lengths,
+                 h5_mtime=np.array([h5_mtime], dtype=np.float64))
+        if verbose:
+            print(f"  wrote sidecar cache to {cache_path}")
+    except Exception as e:
+        if verbose:
+            print(f"  WARNING: failed to write sidecar cache "
+                  f"to {cache_path}: {e}")
+
+    return lengths, "scan"
+
+
+def bake_ukb_length_index_into_h5(h5_path: str, verbose: bool = True) -> int:
+    """Embed per-segment lengths directly into the H5 file.
+
+    Writes an int64 1-D dataset at ``/metadata/segment_lengths``. After this
+    has been run once on a given H5 file, ``UKBPretrainDataset`` loads the
+    length index in a single HDF5 read (tier 1).
+
+    This opens the H5 in read/write mode, so it must NOT be called while
+    training jobs hold read handles on the same file. Run it once after
+    ``preprocess_ukb_h5.py`` completes, or as a one-shot maintenance step.
+
+    Args:
+        h5_path: Path to the UKB H5 file.
+        verbose: Print progress messages.
+
+    Returns:
+        Number of segments indexed.
+    """
+    if verbose:
+        print(f"bake_ukb_length_index_into_h5: {h5_path}")
+
+    # Prefer the sidecar cache if it already exists — that saves the scan.
+    lengths = None
+    source = None
+    cache_path = _sidecar_cache_path(h5_path)
+    if os.path.exists(cache_path):
+        try:
+            h5_mtime = os.path.getmtime(h5_path)
+            with np.load(cache_path) as cache:
+                if abs(float(cache['h5_mtime'][0]) - h5_mtime) < 1.0:
+                    lengths = np.asarray(cache['lengths'], dtype=np.int64)
+                    source = "sidecar-cache"
+        except Exception:
+            lengths = None
+
+    if lengths is None:
+        with h5py.File(h5_path, 'r') as f:
+            lengths = _scan_segment_lengths(f, verbose=verbose)
+        source = "scan"
+
+    if verbose:
+        print(f"  using length index from {source} "
+              f"({len(lengths):,} entries)")
+
+    # Now write it into the H5. Open in append mode to avoid disturbing
+    # existing groups.
+    with h5py.File(h5_path, 'a') as f:
+        if 'metadata' not in f:
+            f.create_group('metadata')
+        meta = f['metadata']
+        if 'segment_lengths' in meta:
+            del meta['segment_lengths']
+        meta.create_dataset(
+            'segment_lengths',
+            data=lengths,
+            dtype='int64',
+            compression='gzip',
+            compression_opts=4,
+        )
+        meta['segment_lengths'].attrs['n_segments'] = int(len(lengths))
+        meta['segment_lengths'].attrs['total_samples'] = int(lengths.sum())
+        meta['segment_lengths'].attrs['built_at'] = datetime.now().isoformat()
+
+    if verbose:
+        print(f"  wrote /metadata/segment_lengths ({len(lengths):,} int64s)")
+    return int(len(lengths))
+
+
+# ---------------------------------------------------------------------------
 # Dataset
 # ---------------------------------------------------------------------------
 
@@ -98,32 +281,40 @@ class UKBPretrainDataset(Dataset):
         # Worker-local h5py handle cache. Populated lazily in __getitem__ so
         # that handles are NOT shared across DataLoader worker processes.
         self._h5: Optional[h5py.File] = None
+        self._segments_group = None  # cached /segments group handle
 
-        # Build a lightweight index. Only segment lengths are cached — at
-        # ~8 bytes per segment this is <10 MB for 1.3M segments.
-        with h5py.File(h5_path, 'r') as f:
-            segs_group = f['segments']
-            total_in_file = len(segs_group)
+        # Three-tier length index, fastest to slowest:
+        #   1. /metadata/segment_lengths embedded inside the H5  -> instant
+        #   2. sidecar .lengths.npz next to the H5               -> <1 s
+        #   3. scan all groups and cache to sidecar              -> minutes
+        # The cache always covers ALL segments in the file so it stays valid
+        # across different train/val index subsets.
+        all_lengths, source = _load_or_build_length_index(h5_path,
+                                                          verbose=verbose)
+        total_in_file = int(all_lengths.shape[0])
 
-            if indices is None:
-                indices = np.arange(total_in_file, dtype=np.int64)
-            else:
-                indices = np.asarray(indices, dtype=np.int64)
+        if indices is None:
+            indices = np.arange(total_in_file, dtype=np.int64)
+        else:
+            indices = np.asarray(indices, dtype=np.int64)
+            if indices.size and (indices.min() < 0
+                                 or indices.max() >= total_in_file):
+                raise IndexError(
+                    f"indices out of range for H5 with {total_in_file} "
+                    f"segments: [{int(indices.min())}, {int(indices.max())}]"
+                )
 
-            self.indices = indices
-            n = len(indices)
-            self.lengths = np.empty(n, dtype=np.int64)
-            for i, seg_idx in enumerate(indices):
-                self.lengths[i] = segs_group[str(int(seg_idx))]['x'].shape[0]
-                if verbose and (i + 1) % 500_000 == 0:
-                    print(f"  indexed {i + 1:,}/{n:,} segments")
+        self.indices = indices
+        self.lengths = all_lengths[indices]
+        n = len(indices)
 
         if verbose:
             total_samples = int(self.lengths.sum())
             elapsed = (datetime.now() - start).total_seconds()
             print(
                 f"  indexed {n:,} segments "
-                f"({total_samples:,} samples) in {elapsed:.1f}s"
+                f"({total_samples:,} samples) in {elapsed:.1f}s "
+                f"via {source}"
             )
             print(
                 f"  length stats: "
@@ -137,22 +328,40 @@ class UKBPretrainDataset(Dataset):
     def __getstate__(self):
         state = self.__dict__.copy()
         state['_h5'] = None
+        state['_segments_group'] = None
         return state
 
-    def _ensure_handle(self) -> h5py.File:
+    def _ensure_handle(self):
+        """Lazily open the H5 and cache the /segments group handle.
+
+        Caching the group handle saves one dict-like lookup per
+        ``__getitem__`` call — cheap individually, but with batch*epochs in
+        the millions it adds up to several seconds per epoch.
+        """
         if self._h5 is None:
             # Each DataLoader worker opens its own handle. SWMR is not
             # required for read-only multi-process access.
-            self._h5 = h5py.File(self.h5_path, 'r')
-        return self._h5
+            #
+            # rdcc_nbytes: per-dataset chunk cache. The default (1 MB) is
+            # tiny relative to our segment sizes; bumping it to 16 MB lets
+            # each worker keep recently-read chunks in memory, which helps
+            # when segments share underlying chunks on disk.
+            self._h5 = h5py.File(
+                self.h5_path,
+                'r',
+                rdcc_nbytes=16 * 1024 * 1024,
+                rdcc_nslots=100_003,
+            )
+            self._segments_group = self._h5['segments']
+        return self._segments_group
 
     def __len__(self) -> int:
         return len(self.indices)
 
     def __getitem__(self, i: int) -> torch.Tensor:
         seg_idx = int(self.indices[i])
-        h5 = self._ensure_handle()
-        g = h5['segments'][str(seg_idx)]
+        segs = self._ensure_handle()
+        g = segs[str(seg_idx)]
 
         # Read raw channels into a [L, 3] float32 array. Reading the three
         # datasets separately matches how the H5 was written; stacking once
@@ -241,13 +450,23 @@ def list_ukb_segment_indices(h5_path: str,
                              max_segments: int = 0) -> np.ndarray:
     """Return a numpy array of segment indices to use.
 
+    Prefers the embedded length-index dataset for a cheap segment count,
+    falls back to ``len(f['segments'])`` which walks the group B-tree.
+
     Args:
         h5_path:      Path to UKB H5 file.
         max_segments: If >0, truncate to the first ``max_segments`` indices.
                       Useful for quick smoke tests.
     """
     with h5py.File(h5_path, 'r') as f:
-        total_in_file = len(f['segments'])
+        # Cheap path: read the count from the embedded index attribute.
+        if 'metadata' in f and 'segment_lengths' in f['metadata']:
+            ds = f['metadata/segment_lengths']
+            total_in_file = int(
+                ds.attrs.get('n_segments', ds.shape[0])
+            )
+        else:
+            total_in_file = len(f['segments'])
     total = (
         min(total_in_file, max_segments) if max_segments > 0 else total_in_file
     )

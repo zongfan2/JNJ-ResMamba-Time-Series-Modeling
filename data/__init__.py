@@ -25,6 +25,7 @@ from .loading_ukb_h5 import (
     read_ukb_h5_metadata,
     list_ukb_segment_indices,
     split_indices_by_segment,
+    bake_ukb_length_index_into_h5,
 )
 
 # Preprocessing

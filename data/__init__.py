@@ -17,8 +17,15 @@ from .loading import (
     load_data_from_h5,
 )
 
-# UKB data loading
-from .loading_ukb_h5 import load_ukb_pretrain_h5
+# UKB data loading (new Dataset/DataLoader pipeline — see module docstring)
+from .loading_ukb_h5 import (
+    UKBPretrainDataset,
+    collate_ukb_batch,
+    make_ukb_collate_fn,
+    read_ukb_h5_metadata,
+    list_ukb_segment_indices,
+    split_indices_by_segment,
+)
 
 # Preprocessing
 from .preprocessing import (

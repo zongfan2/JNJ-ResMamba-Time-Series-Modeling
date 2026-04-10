@@ -66,9 +66,14 @@ from models.resmamba import MBA_v1_ForPretraining
 from models.setup import setup_model
 from models.pretrainer import DINOPretrainer
 from models.dataparallel_pretrainer import DataParallelDINOPretrainer
-from data.loading_ukb_h5 import load_ukb_pretrain_h5
-from data.padding import add_padding_pretrain
-from data.batching import batch_generator, get_nb_steps
+from data.loading_ukb_h5 import (
+    UKBPretrainDataset,
+    make_ukb_collate_fn,
+    read_ukb_h5_metadata,
+    list_ukb_segment_indices,
+    split_indices_by_segment,
+)
+from torch.utils.data import DataLoader
 from losses.standard import EarlyStopping
 
 torch.cuda.empty_cache()
@@ -91,6 +96,12 @@ def parse_args():
     parser.add_argument('--max_seq_len', type=int, default=1221,
                         help='Cap sequence length for padding (default 1221 = 61s at 20Hz, '
                              'matching production). Segments longer than this are truncated.')
+    parser.add_argument('--scaler_path', type=str, default='',
+                        help='Path to a pre-fitted StandardScaler (.joblib/.bin). '
+                             'If provided, UKB data is transformed with this scaler '
+                             'instead of fitting a fresh one — use the production JNJ '
+                             'scaler here so the pretrained encoder learns in the same '
+                             'input distribution JNJ finetuning will use.')
     # Model
     parser.add_argument('--model', type=str, default='mbav1_pretrain',
                         help='Model architecture for pretraining')
@@ -126,6 +137,15 @@ def parse_args():
                         help='Keep only the last N intermediate checkpoints')
     # GPU
     parser.add_argument('--num_gpu', type=str, default='NA')
+    # DataLoader
+    parser.add_argument('--num_workers', type=int, default=4,
+                        help='Number of DataLoader worker processes for H5 reads. '
+                             'Each worker opens its own h5py handle.')
+    parser.add_argument('--pin_memory', type=str, default='True',
+                        help='Pin host memory for faster GPU transfer.')
+    parser.add_argument('--persistent_workers', type=str, default='True',
+                        help='Keep DataLoader workers alive across epochs '
+                             '(avoids re-opening H5 every epoch).')
     # Output
     parser.add_argument('--output_dir', type=str, default='',
                         help='Output directory for weights and logs')
@@ -252,24 +272,28 @@ class CosineWithWarmup(torch.optim.lr_scheduler._LRScheduler):
 # Contrastive pretraining loop (reusable for DINO / SimCLR)
 # ============================================================================
 
-def contrastive_pretrain_epoch(pretrainer, df, batch_size, train_mode, device,
+def contrastive_pretrain_epoch(pretrainer, loader, train_mode, device,
                                optimizer, scheduler, max_seq_len=None,
                                gradient_clip=1.0, scaler=None):
-    """Run one epoch of contrastive pretraining with optional AMP."""
+    """Run one epoch of contrastive pretraining with optional AMP.
+
+    Consumes an already-built ``torch.utils.data.DataLoader`` that yields
+    ``(batch_data, x_lens)`` pairs from ``UKBPretrainDataset`` +
+    ``collate_ukb_batch``. All segment grouping and padding happens inside
+    the DataLoader workers — this loop only moves tensors to GPU and runs
+    the forward/backward pass.
+    """
     epoch_loss = 0.0
     batches = 0
-    seg_column = 'segment'
     use_amp = scaler is not None
 
-    for batch in batch_generator(df=df, batch_size=batch_size,
-                                 stratify=False, shuffle=train_mode,
-                                 seg_column=seg_column):
-        batch_data, x_lens = add_padding_pretrain(
-            batch, device, seg_column=seg_column, max_seq_len=max_seq_len
-        )
+    for batch_data, x_lens in loader:
+        # Collate runs on CPU (in workers); move to GPU here.
+        batch_data = batch_data.to(device, non_blocking=True)
+        x_lens = x_lens.to(device, non_blocking=True)
 
-        # Hard clip to max_seq_len — add_padding_pretrain only sets a FLOOR,
-        # so segments longer than max_seq_len still pass through unclipped.
+        # Defensive cap — collate already truncated, but guard against a
+        # mis-configured collate_fn being passed in.
         if max_seq_len is not None and batch_data.size(1) > max_seq_len:
             batch_data = batch_data[:, :max_seq_len, :]
             x_lens = torch.clamp(x_lens, max=max_seq_len)
@@ -409,38 +433,77 @@ def main():
     print("=" * 60)
 
     # ----- Load UKB data -----
-    df, metadata = load_ukb_pretrain_h5(args.ukb_h5_path,
-                                         max_segments=args.max_segments)
+    # New pipeline: build a torch Dataset that reads segments directly from
+    # H5 (one handle per DataLoader worker). No pandas DataFrame, no
+    # Categorical, no groupby. Pretraining has no labels and the H5 already
+    # stores each segment as its own group, so flattening to rows and
+    # grouping back was pure overhead.
+    metadata = read_ukb_h5_metadata(args.ukb_h5_path)
+    print(f"UKB metadata keys: {list(metadata.keys())}")
 
-    # Z-score normalisation on raw (x, y, z)
-    from sklearn.preprocessing import StandardScaler
-    scaler_data = StandardScaler()
+    # Resolve the pre-fitted scaler ONCE. It is stored inside the Dataset
+    # and applied per segment in __getitem__, so the downstream encoder
+    # sees data in the same distribution the JNJ finetuning pipeline uses.
     cols = ['x', 'y', 'z']
-    df.loc[:, cols] = scaler_data.fit_transform(df[cols])
-    print(f"Applied StandardScaler to {cols}")
+    scaler_data = None
+    if args.scaler_path and os.path.exists(args.scaler_path):
+        print(f"Loading pre-fitted scaler: {args.scaler_path}")
+        scaler_data = joblib.load(args.scaler_path)
+        if not hasattr(scaler_data, 'transform'):
+            raise ValueError(
+                f"Loaded object from {args.scaler_path} is not a fitted "
+                f"scaler (type: {type(scaler_data).__name__})")
+        n_expected = getattr(scaler_data, 'n_features_in_', None)
+        if n_expected is not None and n_expected != len(cols):
+            raise ValueError(
+                f"Scaler expects {n_expected} features but UKB pretraining "
+                f"uses {len(cols)} ({cols}). Scaler fitted on wrong columns?"
+            )
+        print(f"  mean:  {scaler_data.mean_}")
+        print(f"  scale: {scaler_data.scale_}")
+        print(
+            f"Applied pre-fitted scaler to {cols} "
+            f"(UKB data now in JNJ-compatible distribution)"
+        )
+    else:
+        if args.scaler_path:
+            print(
+                f"WARNING: scaler_path={args.scaler_path} does not exist. "
+                f"Proceeding with raw (un-scaled) UKB data. For a pretrained "
+                f"encoder that transfers to JNJ finetuning, pass a valid "
+                f"--scaler_path pointing to the production JNJ scaler."
+            )
+        else:
+            print(
+                "WARNING: no --scaler_path provided; feeding raw UKB "
+                "(x, y, z) into the encoder. The downstream JNJ scaler will "
+                "not match."
+            )
 
-    data_max_len = int(df.groupby('segment', observed=True).size().max()) + 1
-    max_seq_len = min(data_max_len, args.max_seq_len)
-    print(f"Max segment length in data: {data_max_len}")
+    max_seq_len = args.max_seq_len
     print(f"Capped max_seq_len: {max_seq_len}")
 
-    # Truncate segments longer than max_seq_len
-    if data_max_len > max_seq_len:
-        seg_lens = df.groupby('segment', observed=True).cumcount()
-        before = len(df)
-        df = df[seg_lens < max_seq_len]
-        print(f"  Truncated: {before:,} → {len(df):,} samples "
-              f"(removed {before - len(df):,} samples from long segments)")
+    # Build train/val segment-index splits at the segment level.
+    all_indices = list_ukb_segment_indices(args.ukb_h5_path,
+                                           max_segments=args.max_segments)
+    train_idx, val_idx = split_indices_by_segment(all_indices,
+                                                  val_fraction=0.1, seed=42)
+    print(f"Train segments: {len(train_idx):,}, "
+          f"Val segments: {len(val_idx):,}")
 
-    # Train / val split (90/10 by segment)
-    from sklearn.model_selection import train_test_split
-    all_segments = df['segment'].unique()
-    train_segs, val_segs = train_test_split(all_segments, test_size=0.1,
-                                             random_state=42)
-    df_train = df[df['segment'].isin(train_segs)]
-    df_val   = df[df['segment'].isin(val_segs)]
-    print(f"Train segments: {len(train_segs)}, Val segments: {len(val_segs)}")
-    print(f"Train samples: {len(df_train):,}, Val samples: {len(df_val):,}")
+    train_dataset = UKBPretrainDataset(
+        h5_path=args.ukb_h5_path,
+        indices=train_idx,
+        scaler=scaler_data,
+        max_seq_len=max_seq_len,
+    )
+    val_dataset = UKBPretrainDataset(
+        h5_path=args.ukb_h5_path,
+        indices=val_idx,
+        scaler=scaler_data,
+        max_seq_len=max_seq_len,
+        verbose=False,
+    )
 
     # ----- GPU -----
     use_dataparallel, device_ids, device = parse_gpu_config(args.num_gpu)
@@ -540,9 +603,39 @@ def main():
     else:
         optimizer = optim.AdamW(param_groups, lr=lr, betas=(0.9, 0.95))
 
-    nb_steps = get_nb_steps(df=df_train, batch_size=effective_batch_size,
-                            stratify=False, shuffle=True)
-    print(f"Steps per epoch: {nb_steps}")
+    # ----- DataLoaders -----
+    pin_memory = str(args.pin_memory).lower() == 'true'
+    persistent_workers = (
+        str(args.persistent_workers).lower() == 'true' and args.num_workers > 0
+    )
+    collate_fn = make_ukb_collate_fn(max_seq_len=max_seq_len,
+                                     padding_value=0.0)
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=effective_batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+        drop_last=True,
+        persistent_workers=persistent_workers,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=effective_batch_size,
+        shuffle=False,
+        num_workers=max(1, args.num_workers // 2) if args.num_workers > 0 else 0,
+        collate_fn=collate_fn,
+        pin_memory=pin_memory,
+        drop_last=False,
+        persistent_workers=persistent_workers,
+    )
+    nb_steps = len(train_loader)
+    print(f"Train batches/epoch: {nb_steps}, "
+          f"val batches/epoch: {len(val_loader)}")
+    print(f"DataLoader: num_workers={args.num_workers}, "
+          f"pin_memory={pin_memory}, "
+          f"persistent_workers={persistent_workers}")
 
     # ----- LR scheduler: cosine decay with linear warmup -----
     total_steps = nb_steps * args.epochs
@@ -596,7 +689,7 @@ def main():
         # Train
         pretrainer.train()
         train_loss, train_steps = contrastive_pretrain_epoch(
-            pretrainer, df_train, effective_batch_size, True, device,
+            pretrainer, train_loader, True, device,
             optimizer, scheduler, max_seq_len=max_seq_len,
             gradient_clip=args.gradient_clip, scaler=amp_scaler,
         )
@@ -606,7 +699,7 @@ def main():
         with torch.no_grad():
             pretrainer.eval()
             val_loss, val_steps = contrastive_pretrain_epoch(
-                pretrainer, df_val, effective_batch_size, False, device,
+                pretrainer, val_loader, False, device,
                 optimizer, scheduler, max_seq_len=max_seq_len,
             )
         val_losses.append(val_loss)

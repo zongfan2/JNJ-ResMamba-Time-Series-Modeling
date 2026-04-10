@@ -13,6 +13,13 @@ data:
   ukb_h5_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/ukb_pretrain_20hz.h5
   max_segments: 0  # 0 = all 1.3M segments (~48 GB DataFrame, fits in 156 GB RAM)
   max_seq_len: 1221  # 61s @ 20Hz, matching production
+  # Pre-fitted MBA_v1 scaler (3 features: x, y, z) — pretraining transforms
+  # UKB data with this scaler so the encoder learns in the same distribution
+  # JNJ finetuning will use. Set to empty string to fall back to fitting
+  # a fresh scaler on UKB.
+  # mean:  [-8.76e-06,  2.25e-06,  1.77e-06]
+  # scale: [ 0.2026,    0.1444,    0.1708  ]
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
 
 # --- Model ---
 model:

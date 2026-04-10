@@ -268,6 +268,12 @@ def contrastive_pretrain_epoch(pretrainer, df, batch_size, train_mode, device,
             batch, device, seg_column=seg_column, max_seq_len=max_seq_len
         )
 
+        # Hard clip to max_seq_len — add_padding_pretrain only sets a FLOOR,
+        # so segments longer than max_seq_len still pass through unclipped.
+        if max_seq_len is not None and batch_data.size(1) > max_seq_len:
+            batch_data = batch_data[:, :max_seq_len, :]
+            x_lens = torch.clamp(x_lens, max=max_seq_len)
+
         if train_mode:
             optimizer.zero_grad(set_to_none=True)  # slightly faster than zero_grad()
 
@@ -495,7 +501,7 @@ def main():
                 temperature_teacher=0.04,
                 center_momentum=0.9,
                 global_crops=2,
-                local_crops=4,
+                local_crops=2,
                 device_ids=device_ids,
             )
             print(f"Using DataParallelDINOPretrainer on GPUs: {device_ids}")
@@ -510,7 +516,7 @@ def main():
                 temperature_teacher=0.04,
                 center_momentum=0.9,
                 global_crops=2,
-                local_crops=4,
+                local_crops=2,
             )
             pretrainer = pretrainer.to(device)
             print(f"Using single-GPU DINOPretrainer on {device}")

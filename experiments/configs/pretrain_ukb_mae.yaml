@@ -1,0 +1,69 @@
+# =============================================================================
+# UKB MAE Pretraining Config for Deep Scratch
+# =============================================================================
+# Pre-trains the MBA_v1 encoder on UK Biobank accelerometer data using a
+# SimMIM-style masked autoencoder (MBAMAEPretrainer). Masked tokens stay
+# in place so the TCN + Mamba encoder sees the full temporal grid.
+#
+# Resulting encoder weights load into MBA_v1 for JNJ finetuning via the
+# same 'student.*' key convention as the DINO pretrainer.
+#
+# Usage:
+#   python3.11 training/pretrain_ukb_mae.py --config experiments/configs/pretrain_ukb_mae.yaml
+
+# --- Data ---
+data:
+  ukb_h5_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/ukb_pretrain_20hz.h5
+  max_segments: 0  # 0 = all ~1.3M segments
+  max_seq_len: 1221  # 61s @ 20Hz, matching production JNJ pipeline
+  # Pre-fitted MBA_v1 scaler (3 features: x, y, z) so UKB pretraining
+  # matches the JNJ finetuning input distribution.
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+# --- Model ---
+model:
+  model: mbav1_pretrain
+  pretraining_method: MAE
+
+# --- MAE-specific ---
+mae:
+  patch_size: 20          # 1s blocks @ 20Hz
+  mask_ratio: 0.6         # fraction of non-overlapping blocks masked
+  decoder_depth: 2
+  decoder_dim: 0          # 0 = num_filters // 2 (64 when num_filters=128)
+  decoder_kernel_size: 7
+  decoder_dropout: 0.1
+  decoder_drop_path: 0.1
+  decoder_norm: BN
+  norm_pixel_loss: "True" # normalize target patches per-block (MAE paper)
+
+# --- Training ---
+training:
+  batch_size: 512         # DataParallel splits across GPUs (512/4 = 128 per GPU)
+  epochs: 30              # ~1.3M segments × 30 epochs = 39M views
+  # MAE linear lr scaling: lr = blr * batch_size / 256, blr=1.5e-4 -> 3e-4
+  lr: 0.0003
+  optim: AdamW
+  weight_decay: 0.05
+  warmup_epochs: 5
+  patience: 15
+  gradient_clip: 1.0
+  use_amp: "True"
+
+# --- Checkpoint ---
+checkpoint:
+  save_every: 5
+  keep_last_n: 5
+
+# --- GPU / DataLoader ---
+gpu:
+  num_gpu: "4"
+dataloader:
+  num_workers: 4
+  pin_memory: "True"
+  persistent_workers: "True"
+
+# --- Output ---
+output:
+  output_dir: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/pretrain_mae/
+  clear_tracker: "False"

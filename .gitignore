@@ -61,3 +61,6 @@ tests/IMPORT_TEST_REPORT.md
 app/
 papers/
 acmart-primary/
+
+# Session exports (local only)
+session_export.md

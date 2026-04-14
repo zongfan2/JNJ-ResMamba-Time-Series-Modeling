@@ -1219,18 +1219,30 @@ class MBA_v1_ForPretraining(nn.Module):
 
         self.num_filters = num_filters
 
-    def forward(self, x, x_lengths, **kwargs):
+    def forward(self, x, x_lengths, return_sequence=False,
+                token_override=None, **kwargs):
         """
-        Encode and return CLS-token pooled features.
+        Encode and return CLS-token pooled features (default) or the full
+        token sequence (when ``return_sequence=True``).
 
         Args:
             x: [B, SeqLen, C] — channel-last.
                DINOPretrainer internally does crop.permute(0,2,1) before
                calling the student, so input arrives as [B, L, C].
             x_lengths: sequence lengths tensor
+            return_sequence: if True, returns (sequence, mask_with_cls) where
+                sequence has shape [B, num_filters, 1 + SeqLen] (CLS at
+                index 0) and mask has shape [B, 1 + SeqLen]. Used by the
+                MAE pretraining path which needs the full token grid.
+            token_override: optional [B, num_filters, SeqLen] tensor that
+                bypasses the ``input_projection`` step. Used by MAE so the
+                pretrainer can inject learnable ``mask_token`` embeddings at
+                masked positions *before* the encoder, while leaving the
+                MBA_v1 encoder architecture untouched.
 
         Returns:
-            pooled: [B, num_filters]
+            return_sequence=False (default): pooled [B, num_filters]
+            return_sequence=True:            (sequence, mask_with_cls)
         """
         batch_size, seq_len, channels = x.size()
 
@@ -1240,22 +1252,41 @@ class MBA_v1_ForPretraining(nn.Module):
         )
 
         # Input projection: [B, L, C] -> [B, num_filters, L]
-        x = self.input_projection(x.permute(0, 2, 1))
+        if token_override is None:
+            x_feat = self.input_projection(x.permute(0, 2, 1))
+        else:
+            # Caller already built the per-timestep token grid (e.g. with
+            # learnable mask tokens injected at masked positions).
+            assert (
+                token_override.dim() == 3
+                and token_override.size(0) == batch_size
+                and token_override.size(2) == seq_len
+            ), (
+                f"token_override shape {tuple(token_override.shape)} must be "
+                f"[B={batch_size}, num_filters, SeqLen={seq_len}]"
+            )
+            x_feat = token_override
 
         # CLS token
         token = self.cls_token.expand(batch_size, -1, -1)
-        x = torch.cat((token, x), dim=2)
-        mask = torch.cat((torch.ones(batch_size, 1, device=x.device), mask), dim=1)
+        x_feat = torch.cat((token, x_feat), dim=2)
+        mask = torch.cat(
+            (torch.ones(batch_size, 1, device=x_feat.device), mask), dim=1
+        )
 
         # Encoder
         if self.num_encoder_layers > 0:
-            x, _ = self.encoder(x, mask, return_intermediates=True)
+            x_feat, _ = self.encoder(x_feat, mask, return_intermediates=True)
 
         # Positional encoding
-        x = self.positional_encoding(x)
+        x_feat = self.positional_encoding(x_feat)
+
+        if return_sequence:
+            # Full token grid for downstream MAE decoder.
+            return x_feat, mask
 
         # CLS token pooling
-        pooled = x[:, :, 0]  # [B, num_filters]
+        pooled = x_feat[:, :, 0]  # [B, num_filters]
         return pooled
 
     def get_encoder_state_dict(self):

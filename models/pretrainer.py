@@ -173,7 +173,6 @@ class MAEPretrainer(nn.Module):
         num_patches = x.size(2)
         x = x.permute(0, 1, 2, 3).reshape(B, C * num_patches, self.vit.patch_size)
         
-        print(x.shape, pred.shape, mask.shape)
         # Apply mask: only compute loss on masked patches
         mask = mask[:, 1:]  # Remove CLS token
         
@@ -1155,6 +1154,298 @@ class RelConPretrainer(nn.Module):
             "projected_features": anchor_proj.detach(),
             "distances": distances.detach()
         }
+
+
+# ============================================================================
+# MBAMAEPretrainer — SimMIM-style MAE built on the MBA_v1 encoder
+# ============================================================================
+#
+# Why not reuse MAEPretrainer (the ViT flavor)?
+#
+#   MAEPretrainer compacts the visible tokens to a shorter sequence and relies
+#   on self-attention being permutation-invariant to recover position from
+#   pos_embed alone. MBA_v1's encoder is a dilated TCN + Mamba stack — both
+#   are strictly locality-sensitive. Compacting visible tokens would destroy
+#   the temporal neighbourhood that TCN and Mamba rely on, so we use a
+#   SimMIM-style in-place masking scheme instead: masked positions stay in
+#   the sequence and are replaced with a learnable mask_token embedding
+#   BEFORE the encoder runs. The encoder sees the full [B, D, T] grid, the
+#   loss is computed only at masked positions.
+#
+# Encoder: an unmodified MBA_v1_ForPretraining with ``return_sequence=True``
+#          and ``token_override=`` used to inject the mask tokens without
+#          touching the MBA_v1 architecture.
+#
+# Decoder: a lightweight stack of AttModule_mamba blocks (default 2 layers,
+#          half width) + a Conv1d head that projects decoder features back
+#          to the raw 3-channel signal at full temporal resolution. No
+#          transposed conv / upsampling is needed because SimMIM keeps the
+#          encoder at the original temporal resolution.
+#
+# Loss: MSE on raw samples, computed only at masked (= non-padded, masked-
+#       block) positions. Per-patch target normalization (the MAE
+#       ``norm_pixel_loss`` trick) is applied inside patch_size windows to
+#       improve robustness.
+
+from .attention import AttModule_mamba  # noqa: E402  (kept local to avoid cycles)
+
+
+class MBAMAEPretrainer(nn.Module):
+    """
+    SimMIM-style Masked Autoencoder on top of an MBA_v1 encoder.
+
+    Args:
+        base_model: an ``MBA_v1_ForPretraining`` instance. Its forward() must
+            support ``return_sequence=True`` and ``token_override=``.
+        num_filters: encoder embedding dim (matches ``base_model.num_filters``).
+        input_dim: number of raw signal channels (3 for accelerometer).
+        patch_size: width in samples of each masking block (20 ≈ 1s at 20Hz).
+        mask_ratio: fraction of patches to mask (0.6 for block masking).
+        decoder_depth: number of Mamba decoder layers.
+        decoder_dim: decoder width; defaults to num_filters // 2.
+        decoder_kernel_size: conv kernel inside decoder's Mamba blocks.
+        decoder_dropout: dropout for decoder blocks.
+        decoder_drop_path: stochastic depth for decoder blocks.
+        decoder_norm: normalization type for decoder blocks ('BN'/'IN'/'GN').
+        norm_pixel_loss: if True, per-patch mean/std normalize targets before
+            MSE (the standard MAE trick — empirically improves representations).
+
+    Forward signature mirrors DINOPretrainer so the same
+    ``contrastive_pretrain_epoch`` training loop (and its MAE sibling) can
+    consume it: ``forward(x, x_lengths)`` returns a dict with ``"loss"``.
+    """
+
+    def __init__(
+        self,
+        base_model,
+        num_filters: int = 128,
+        input_dim: int = 3,
+        patch_size: int = 20,
+        mask_ratio: float = 0.6,
+        decoder_depth: int = 2,
+        decoder_dim: Optional[int] = None,
+        decoder_kernel_size: int = 7,
+        decoder_dropout: float = 0.1,
+        decoder_drop_path: float = 0.1,
+        decoder_norm: str = "BN",
+        norm_pixel_loss: bool = True,
+    ):
+        super().__init__()
+        self.student = base_model  # name 'student' keeps checkpoint keys
+                                    # consistent with DINO so
+                                    # load_pretrained_encoder_into_mbav1
+                                    # needs no changes.
+        self.num_filters = num_filters
+        self.input_dim = input_dim
+        self.patch_size = patch_size
+        self.mask_ratio = mask_ratio
+        self.norm_pixel_loss = norm_pixel_loss
+
+        # Learnable mask token, injected at masked positions in the encoder
+        # input (broadcast along the time axis via repeat_interleave below).
+        self.mask_token = nn.Parameter(torch.zeros(1, num_filters, 1))
+        nn.init.trunc_normal_(self.mask_token, std=0.02)
+
+        # Decoder: width reduction -> stack of AttModule_mamba -> conv head.
+        if decoder_dim is None:
+            decoder_dim = max(8, num_filters // 2)
+        self.decoder_dim = decoder_dim
+        self.decoder_input_proj = nn.Conv1d(num_filters, decoder_dim,
+                                             kernel_size=1)
+        self.decoder_blocks = nn.ModuleList([
+            AttModule_mamba(
+                dilation=2 ** i,
+                in_channels=decoder_dim,
+                out_channels=decoder_dim,
+                att_type="sliding_att",
+                stage="decoder",
+                alpha=1,
+                drop_path_rate=decoder_drop_path,
+                kernel_size=decoder_kernel_size,
+                dropout_rate=decoder_dropout,
+                norm=decoder_norm,
+            )
+            for i in range(decoder_depth)
+        ])
+        self.decoder_norm = (
+            nn.BatchNorm1d(decoder_dim)
+            if decoder_norm == "BN"
+            else nn.InstanceNorm1d(decoder_dim, track_running_stats=False)
+        )
+        # Per-sample reconstruction: decoder_dim -> input_dim at every
+        # timestep. Kernel 1 keeps the temporal grid unchanged (SimMIM).
+        self.reconstruction_head = nn.Conv1d(decoder_dim, input_dim,
+                                             kernel_size=1)
+
+    # ------------------------------------------------------------------
+    # Block masking over the *valid* region of each sample
+    # ------------------------------------------------------------------
+
+    def _build_block_mask(self, batch_size: int, seq_len: int,
+                          x_lengths: torch.Tensor,
+                          device: torch.device) -> torch.Tensor:
+        """
+        Build a [B, seq_len] float mask where 1 = masked (reconstruct) and
+        0 = visible (keep). Masks are drawn as non-overlapping blocks of
+        ``patch_size`` samples within each sample's valid length. Padded
+        positions are never masked.
+        """
+        ps = self.patch_size
+        mask = torch.zeros(batch_size, seq_len, device=device)
+
+        for b in range(batch_size):
+            L_valid = int(x_lengths[b].item())
+            if L_valid <= 0:
+                continue
+            n_blocks = L_valid // ps
+            if n_blocks <= 0:
+                # Too short for a single block — mask nothing, the sample
+                # still contributes via the encoder without loss.
+                continue
+            n_mask = max(1, int(round(n_blocks * self.mask_ratio)))
+            n_mask = min(n_mask, n_blocks)
+            perm = torch.randperm(n_blocks, device=device)[:n_mask]
+            for blk in perm.tolist():
+                s = blk * ps
+                e = s + ps
+                mask[b, s:e] = 1.0
+
+        return mask  # [B, T] float
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def forward(self, x, x_lengths):
+        """
+        Args:
+            x: [B, T, C] raw (scaled) input.
+            x_lengths: [B] valid lengths (excluding padding).
+
+        Returns:
+            dict with keys ``loss``, ``pred``, ``mask``, ``valid_mask``.
+        """
+        B, T, C = x.shape
+        device = x.device
+        if not isinstance(x_lengths, torch.Tensor):
+            x_lengths = torch.as_tensor(x_lengths, device=device)
+        else:
+            x_lengths = x_lengths.to(device)
+
+        # 1) Raw input -> per-timestep token grid via MBA_v1's own
+        #    ConvProjection (1x1 conv, length-preserving). We do this
+        #    ourselves so we can splice in mask tokens before the encoder.
+        tokens = self.student.input_projection(x.permute(0, 2, 1))
+        # tokens: [B, num_filters, T]
+
+        # 2) Sample block mask over valid positions only.
+        mask = self._build_block_mask(B, T, x_lengths, device)  # [B, T]
+
+        # 3) Replace masked positions with the learnable mask_token.
+        m3 = mask.unsqueeze(1)  # [B, 1, T]
+        mask_tokens = self.mask_token.expand(B, -1, T)
+        tokens = tokens * (1.0 - m3) + mask_tokens * m3
+
+        # 4) Run the encoder with the pre-computed token grid. The encoder
+        #    prepends its CLS token and applies positional encoding inside.
+        latent, enc_mask = self.student(
+            x, x_lengths,
+            return_sequence=True,
+            token_override=tokens,
+        )
+        # latent: [B, num_filters, 1 + T]
+        # enc_mask: [B, 1 + T] — includes CLS at index 0
+
+        # 5) Drop the CLS token for per-timestep reconstruction.
+        latent = latent[:, :, 1:]                 # [B, num_filters, T]
+        enc_mask_body = enc_mask[:, 1:]           # [B, T]
+
+        # 6) Decoder: width reduction + Mamba blocks + norm.
+        dec = self.decoder_input_proj(latent)     # [B, decoder_dim, T]
+        for blk in self.decoder_blocks:
+            dec = blk(dec, None, enc_mask_body)
+        dec = self.decoder_norm(dec)
+
+        # 7) Reconstruct the raw signal.
+        pred = self.reconstruction_head(dec)      # [B, input_dim, T]
+        pred = pred.permute(0, 2, 1)              # [B, T, input_dim]
+
+        # 8) Loss: MSE on masked, non-padded positions, with per-patch
+        #    target normalization.
+        loss, loss_mask = self._mae_loss(x, pred, mask, enc_mask_body)
+
+        return {
+            "loss": loss,
+            "pred": pred,
+            "mask": mask,
+            "valid_mask": enc_mask_body,
+            "loss_mask": loss_mask,
+        }
+
+    # ------------------------------------------------------------------
+    # Loss helper
+    # ------------------------------------------------------------------
+
+    def _mae_loss(self, x, pred, mask, valid_mask):
+        """
+        Args:
+            x:          [B, T, C] — raw target
+            pred:       [B, T, C] — reconstruction
+            mask:       [B, T]    — 1 at masked positions, 0 elsewhere
+            valid_mask: [B, T]    — 1 at non-padded positions, 0 at padding
+
+        Returns:
+            scalar loss, combined loss_mask [B, T] for logging.
+        """
+        B, T, C = x.shape
+        ps = self.patch_size
+
+        if self.norm_pixel_loss and ps > 1:
+            # Normalize each non-overlapping patch_size window of the target
+            # to zero mean / unit variance per channel, MAE-style. Done on x
+            # only; pred is trained to match the normalized x.
+            Tp = (T // ps) * ps
+            if Tp > 0:
+                x_body = x[:, :Tp, :]                             # [B, Tp, C]
+                x_reshape = x_body.reshape(B, Tp // ps, ps, C)    # [B, Np, ps, C]
+                mean = x_reshape.mean(dim=2, keepdim=True)
+                var = x_reshape.var(dim=2, keepdim=True, unbiased=False)
+                x_norm = (x_reshape - mean) / torch.sqrt(var + 1e-6)
+                x_body_norm = x_norm.reshape(B, Tp, C)
+                x_tgt = x.clone()
+                x_tgt[:, :Tp, :] = x_body_norm
+            else:
+                x_tgt = x
+        else:
+            x_tgt = x
+
+        # Combined mask: only masked AND valid positions contribute.
+        loss_mask = mask * valid_mask                             # [B, T]
+        denom = loss_mask.sum() * C + 1e-6
+
+        sq = (pred - x_tgt) ** 2                                  # [B, T, C]
+        sq = sq * loss_mask.unsqueeze(-1)
+        loss = sq.sum() / denom
+        return loss, loss_mask
+
+    # ------------------------------------------------------------------
+    # Misc helpers
+    # ------------------------------------------------------------------
+
+    def get_encoder_state_dict(self):
+        """Return encoder-only weights for downstream transfer to MBA_v1."""
+        return self.student.state_dict()
+
+    # No teacher EMA, but keep a dummy momentum attribute so the training
+    # loop can set it uniformly across pretrainers without branching.
+    @property
+    def momentum(self):
+        return 0.0
+
+    @momentum.setter
+    def momentum(self, value):
+        pass
+
 
 if __name__ == "__main__":
     x = torch.randn(2, 3, 20)  # Example input tensor

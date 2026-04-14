@@ -270,6 +270,11 @@ def mae_pretrain_epoch(pretrainer, loader, train_mode, device,
             res = pretrainer(batch_data, x_lens)
             loss = res["loss"]
 
+        # nn.DataParallel gathers per-GPU scalar losses along dim 0,
+        # producing a vector. Reduce to a scalar for backward and checks.
+        if loss.dim() > 0:
+            loss = loss.mean()
+
         if train_mode:
             if torch.isnan(loss) or torch.isinf(loss):
                 print("  Warning: NaN/Inf loss, skipping batch.")

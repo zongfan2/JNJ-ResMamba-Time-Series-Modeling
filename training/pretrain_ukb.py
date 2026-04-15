@@ -392,8 +392,30 @@ def load_pretrained_encoder_into_mbav1(mbav1_model, pretrain_ckpt_path,
         # Fallback: already a clean encoder dict (e.g. _encoder_only.pth)
         encoder_state = ckpt
 
-    mbav1_keys = set(mbav1_model.state_dict().keys())
+    target_state = mbav1_model.state_dict()
+    mbav1_keys = set(target_state.keys())
     matched = {k: v for k, v in encoder_state.items() if k in mbav1_keys}
+
+    # Reconcile small shape mismatches. Pretraining builds the encoder with
+    # max_seq_len + 1 to reserve a CLS slot; fine-tuning uses max_seq_len
+    # directly. The resulting ±1 mismatch on `positional_encoding.pe` (and
+    # any other size-ordered tensor) is safely resolved by trimming the
+    # checkpoint tensor to the target model's shape.
+    for k in list(matched.keys()):
+        src_shape = tuple(matched[k].shape)
+        dst_shape = tuple(target_state[k].shape)
+        if src_shape == dst_shape:
+            continue
+        if len(src_shape) == len(dst_shape) and all(
+            s >= d for s, d in zip(src_shape, dst_shape)
+        ):
+            slices = tuple(slice(0, d) for d in dst_shape)
+            matched[k] = matched[k][slices].contiguous()
+            print(f"  trimmed {k}: {src_shape} -> {dst_shape}")
+        else:
+            print(f"  dropped {k}: incompatible shape "
+                  f"{src_shape} vs target {dst_shape}")
+            del matched[k]
 
     missing, unexpected = mbav1_model.load_state_dict(matched, strict=False)
     print(f"Loaded {len(matched)} pretrained encoder parameters into MBA_v1")

@@ -589,7 +589,18 @@ def train_pipeline(args):
     pretraining= (str(args.pretraining).lower()=="true")
     training_iterations=args.training_iterations
     pretrained_model_path=str(args.pretrained_model_path)
-    freeze_encoder=(str(args.freeze_encoder)).lower()=="true"
+    # freeze_encoder accepts:
+    #   "false" / false        -> full fine-tune (default)
+    #   "true"  / "encoder"    -> freeze encoder only
+    #   "encoder_and_decoder"  -> freeze encoder + decoder (linear-probe)
+    freeze_mode_raw = str(args.freeze_encoder).lower()
+    if freeze_mode_raw in ("true", "encoder"):
+        freeze_mode = "encoder"
+    elif freeze_mode_raw in ("encoder_and_decoder", "encdec"):
+        freeze_mode = "encoder_and_decoder"
+    else:
+        freeze_mode = "none"
+    freeze_encoder = freeze_mode != "none"
     scaler_path=str(args.scaler_path)
     
     dataset_name = os.path.basename(input_data_folder.rstrip("/raw"))
@@ -838,9 +849,12 @@ def train_pipeline(args):
                     model = load_pretrained_encoder_into_mbav1(
                         model, pretrained_model_path, device=device,
                     )
-                    if freeze_encoder:
+                    if freeze_mode in ("encoder", "encoder_and_decoder"):
                         model.freeze_encoder()
                         print("MBA_v1 encoder frozen for fine-tuning.")
+                    if freeze_mode == "encoder_and_decoder":
+                        model.freeze_decoder()
+                        print("MBA_v1 decoder also frozen (linear-probe mode).")
 
             total_params = 0
             trainable_params = 0

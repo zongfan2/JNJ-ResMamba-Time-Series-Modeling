@@ -637,6 +637,11 @@ ABLATION_VARIANTS = {
     # Pretraining variants — runs pending; uncomment once the jobs finish:
     # 'Ours (w/ DINO pretrain)':  'ablation-full-dino_pretrain-bs32-fold4',
     # 'Ours (w/ MAE pretrain)':   'ablation-full-mae_pretrain-bs32-fold4',
+    # Fine-tuning strategy sub-ablation — uncomment once the runs finish:
+    # 'Freeze Encoder (DINO)':            'ablation-freeze_encoder_dino-bs32-fold4',
+    # 'Freeze Encoder + Decoder (DINO)':  'ablation-freeze_encdec_dino-bs32-fold4',
+    # 'Freeze Encoder (MAE)':             'ablation-freeze_encoder_mae-bs32-fold4',
+    # 'Freeze Encoder + Decoder (MAE)':   'ablation-freeze_encdec_mae-bs32-fold4',
     'w/o Mask Head':            'ablation-no_mask_head-bs32-fold4',
     'w/o Mamba Encoder':        'ablation-no_mamba-bs32-fold4',
     'w/o ResNet Mapping':       'ablation-no_resnet-bs32-fold4',

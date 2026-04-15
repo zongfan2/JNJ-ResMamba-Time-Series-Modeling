@@ -1,0 +1,45 @@
+# =============================================================================
+# Ablation — "Freeze Encoder (MAE init)" : MAE-init MBA_v1, encoder frozen
+# =============================================================================
+# Mirror of ablation_freeze_encoder.yaml but initialized from the UKB MAE
+# encoder instead of DINO. Together with ablation_freeze_encdec_mae.yaml
+# and ablation_full_with_mae.yaml, this forms a 3-row MAE fine-tuning-
+# strategy sub-ablation, parallel to the DINO triplet.
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_freeze_encoder_mae.yaml
+
+experiment:
+  name: ablation_freeze_encoder_mae
+  description: "MAE-init MBA_v1 with encoder frozen; decoder + heads trainable."
+  task: scratch_detection
+  date: "2026-04-15"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+model:
+  architecture: mbav1
+  overrides: {}
+
+training:
+  output: ablation-freeze_encoder_mae-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: encoder  # freeze input_projection, cls_token, encoder, PE
+  pretrained_model_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/pretrain_mae/weights/MAE_encoder_only.pth
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

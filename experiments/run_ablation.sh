@@ -13,6 +13,10 @@
 #   full_no_pretrain      — MBA_v1 trained from scratch (ablation baseline)
 #   full_with_dino        — MBA_v1 fine-tuned from UKB DINO encoder
 #   full_with_mae         — MBA_v1 fine-tuned from UKB MAE  encoder
+#   freeze_encoder_dino   — DINO-init, freeze encoder (decoder + heads train)
+#   freeze_encdec_dino    — DINO-init, freeze encoder + decoder (heads only)
+#   freeze_encoder_mae    — MAE-init,  freeze encoder
+#   freeze_encdec_mae     — MAE-init,  freeze encoder + decoder
 #   no_mask_head          — wl2 = 0
 #   no_mamba              — blocks_MBA1 = 0
 #   no_resnet             — num_feature_layers = 0
@@ -32,6 +36,10 @@ VALID_VARIANTS=(
     full_no_pretrain
     full_with_dino
     full_with_mae
+    freeze_encoder_dino
+    freeze_encdec_dino
+    freeze_encoder_mae
+    freeze_encdec_mae
     no_mask_head
     no_mamba
     no_resnet

@@ -1137,6 +1137,17 @@ class MBA_v1(nn.Module):
         for p in self.positional_encoding.parameters():
             p.requires_grad = True
 
+    def freeze_decoder(self):
+        """Freeze the cross-attention Mamba decoder. Use alongside
+        ``freeze_encoder`` for a linear-probe-style fine-tune where only
+        the output heads (out1/out2/out3) update."""
+        for p in self.decoder.parameters():
+            p.requires_grad = False
+
+    def unfreeze_decoder(self):
+        for p in self.decoder.parameters():
+            p.requires_grad = True
+
     def forward(self, x, x_lengths, labels1=None, labels3=None,
                 apply_mixup=False, mixup_alpha=0.2):
         batch_size, seq_len, channels = x.size()

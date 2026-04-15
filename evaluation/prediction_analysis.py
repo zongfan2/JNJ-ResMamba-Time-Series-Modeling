@@ -32,14 +32,17 @@ from data.loading import load_data
 from utils.common import create_folder
 
 
-def get_predictions(folder_path, model, df_rest, filter_tso=False):
+def get_predictions(folder_path, model, df_rest=None, filter_tso=False):
     """
-    Load model predictions from CSV files and merge with rest data.
+    Load model predictions from CSV files and optionally merge with rest data.
 
     Args:
         folder_path: Base directory containing model prediction folders
         model: Name of the model subdirectory
-        df_rest: Rest data DataFrame to concatenate with predictions
+        df_rest: Optional rest-frames DataFrame to concatenate (legacy
+            per-patient analysis path). Paper-table modes pass ``None``
+            and skip the concat — the expensive ``load_data`` call over
+            the raw 410 files is only needed for full-night aggregation.
         filter_tso: If True, filter predictions to only include TSO (Time Segment of Interest)
 
     Returns:
@@ -69,7 +72,10 @@ def get_predictions(folder_path, model, df_rest, filter_tso=False):
 
     if len(dfp_list) > 0:
         dfp = pd.concat(dfp_list, ignore_index=True)
-        dfp = pd.concat([dfp, df_rest[df_rest.inTSO == True]], ignore_index=True)
+        if df_rest is not None and len(df_rest) > 0:
+            dfp = pd.concat(
+                [dfp, df_rest[df_rest.inTSO == True]], ignore_index=True,
+            )
         dfp['PID'] = dfp.reset_index().segment.str.split('_', expand=True).iloc[:, 0]
     else:
         dfp = pd.DataFrame()
@@ -659,7 +665,9 @@ def run_paper_ablation(args):
     print("PAPER TABLE: Deep Scratch Ablation Study")
     print("=" * 80)
 
-    df_rest, dataset_name = load_dataset(args.train_data, energy_threshold=5)
+    # Paper metrics only need per-segment predictions from
+    # ``Y_test_Y_pred_*.csv`` — no raw-frame data required.
+    dataset_name = os.path.basename(args.train_data.rstrip('/').rstrip('/raw'))
     folder_path = (
         f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/"
     )
@@ -669,7 +677,7 @@ def run_paper_ablation(args):
     summary_df, _ = generate_paper_tables(
         variants=ABLATION_VARIANTS,
         folder_path=folder_path,
-        df_rest=df_rest,
+        df_rest=None,
         out_dir=args.out_dir,
         full_label='Ours (w/o pretrain)',  # ΔF1 reference row
         table_kind='ablation',
@@ -707,7 +715,7 @@ def run_paper_main_results(args):
     print("PAPER TABLE: Main Results (Baselines + Ours)")
     print("=" * 80)
 
-    df_rest, dataset_name = load_dataset(args.train_data, energy_threshold=5)
+    dataset_name = os.path.basename(args.train_data.rstrip('/').rstrip('/raw'))
     folder_path = (
         f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/"
     )
@@ -717,7 +725,7 @@ def run_paper_main_results(args):
     summary_df, _ = generate_paper_tables(
         variants=MAIN_RESULTS_VARIANTS,
         folder_path=folder_path,
-        df_rest=df_rest,
+        df_rest=None,
         out_dir=args.out_dir,
         table_kind='main',
     )

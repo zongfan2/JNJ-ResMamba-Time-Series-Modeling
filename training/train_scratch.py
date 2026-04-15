@@ -52,6 +52,7 @@ parser.add_argument("--training_iterations",type=int,default=1, required=False, 
 parser.add_argument("--pretrained_model_path",type=str,default="", required=False, help="Path to pretrained MBATSMForPretraining model weights for finetuning.")
 parser.add_argument("--freeze_encoder",type=str,default="False", required=False, help="Whether to freeze encoder during finetuning.")
 parser.add_argument('--scaler_path', type=str, default="", required=False, help='Path to the saved scaler. If not provided, a new scaler will be fitted.')
+parser.add_argument('--single_fold', type=str, default="", required=False, help='If set (e.g. FOLD4), restrict the LOFO loop to this one fold — useful for smoke tests and single-GPU sanity runs.')
 
 
 args = parser.parse_args()
@@ -83,15 +84,21 @@ if args.config:
         # transfer_learning section
         'pretrained_model_path': cfg.get('transfer_learning', {}).get('pretrained_model_path'),
         'freeze_encoder':        cfg.get('transfer_learning', {}).get('freeze_encoder'),
+        # smoke-test knob
+        'single_fold':           cfg.get('training', {}).get('single_fold'),
     }
+
+    # Detect which keys were explicitly set on the CLI so we don't
+    # clobber them with YAML values.
+    cli_explicit = set()
+    for tok in sys.argv[1:]:
+        if tok.startswith('--'):
+            cli_explicit.add(tok[2:].split('=', 1)[0].replace('-', '_'))
 
     # Apply YAML values where CLI didn't explicitly override
     for key, yaml_val in yaml_to_args.items():
-        if yaml_val is not None:
-            current = getattr(args, key, None)
-            # Only override if the arg is still at its default (None or argparse default)
-            if current is None or (key == 'num_gpu' and current == 'NA'):
-                setattr(args, key, yaml_val)
+        if yaml_val is not None and key not in cli_explicit:
+            setattr(args, key, yaml_val)
 
     # Ablation knobs: model.overrides is a flat dict merged into best_params
     # after the factory returns its baseline. Used to toggle ablation variants
@@ -691,6 +698,17 @@ def train_pipeline(args):
         PID_name="FOLD"
     input_subjects = df[PID_name].unique()  # debug: with DF's subjects
     #input_subjects= ['FOLD1'] # Test only on Fold1. No cross validation
+    # Optional smoke-test knob: restrict to a single fold/subject by name.
+    # Set via CLI `--single_fold FOLD4` or YAML `training.single_fold: FOLD4`.
+    single_fold = getattr(args, 'single_fold', '') or ''
+    if single_fold:
+        if single_fold in input_subjects:
+            print(f"[single_fold] restricting run to {single_fold!r}")
+            input_subjects = np.array([single_fold])
+        else:
+            raise ValueError(
+                f"single_fold={single_fold!r} not found in {list(input_subjects)}"
+            )
     print(input_subjects)
     for i in range(len(input_subjects)):
         torch.cuda.empty_cache()
@@ -810,6 +828,19 @@ def train_pipeline(args):
                         model.freeze_encoder()
                         print("Encoder frozen for fine-tuning.")
                     print("Pretrained weights loaded and switched to fine-tuning mode!")
+                elif model_name == "mbav1":
+                    # DINO/MAE encoder weights saved by pretrain_ukb*.py
+                    from training.pretrain_ukb import (
+                        load_pretrained_encoder_into_mbav1,
+                    )
+                    print(f"\n Loading pretrained UKB encoder into MBA_v1 from "
+                          f"{pretrained_model_path}")
+                    model = load_pretrained_encoder_into_mbav1(
+                        model, pretrained_model_path, device=device,
+                    )
+                    if freeze_encoder:
+                        model.freeze_encoder()
+                        print("MBA_v1 encoder frozen for fine-tuning.")
 
             total_params = 0
             trainable_params = 0

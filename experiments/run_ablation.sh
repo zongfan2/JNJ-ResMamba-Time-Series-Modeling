@@ -11,7 +11,8 @@
 #
 # Variants:
 #   full_no_pretrain      — MBA_v1 trained from scratch (ablation baseline)
-#   full_with_pretrain    — MBA_v1 fine-tuned from UKB MAE encoder
+#   full_with_dino        — MBA_v1 fine-tuned from UKB DINO encoder
+#   full_with_mae         — MBA_v1 fine-tuned from UKB MAE  encoder
 #   no_mask_head          — wl2 = 0
 #   no_mamba              — blocks_MBA1 = 0
 #   no_resnet             — num_feature_layers = 0
@@ -29,7 +30,8 @@ ABLATION_DIR="${ROOT_DIR}/experiments/configs/ablation"
 
 VALID_VARIANTS=(
     full_no_pretrain
-    full_with_pretrain
+    full_with_dino
+    full_with_mae
     no_mask_head
     no_mamba
     no_resnet

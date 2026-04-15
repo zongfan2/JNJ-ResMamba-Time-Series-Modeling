@@ -1116,6 +1116,27 @@ class MBA_v1(nn.Module):
         self.out2 = OutModule(num_filters, num_filters, 1, norm3, 'Conv')
         self.out3 = OutModule(num_filters, num_filters, 1, norm3, 'FC')
 
+    def freeze_encoder(self):
+        """Freeze the parts that correspond to the pretrained encoder:
+        input_projection, cls_token, encoder (FeatureExtractor), and
+        positional_encoding. The decoder and output heads stay trainable."""
+        for p in self.input_projection.parameters():
+            p.requires_grad = False
+        self.cls_token.requires_grad = False
+        for p in self.encoder.parameters():
+            p.requires_grad = False
+        for p in self.positional_encoding.parameters():
+            p.requires_grad = False
+
+    def unfreeze_encoder(self):
+        for p in self.input_projection.parameters():
+            p.requires_grad = True
+        self.cls_token.requires_grad = True
+        for p in self.encoder.parameters():
+            p.requires_grad = True
+        for p in self.positional_encoding.parameters():
+            p.requires_grad = True
+
     def forward(self, x, x_lengths, labels1=None, labels3=None,
                 apply_mixup=False, mixup_alpha=0.2):
         batch_size, seq_len, channels = x.size()

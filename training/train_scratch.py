@@ -93,7 +93,21 @@ if args.config:
             if current is None or (key == 'num_gpu' and current == 'NA'):
                 setattr(args, key, yaml_val)
 
+    # Ablation knobs: model.overrides is a flat dict merged into best_params
+    # after the factory returns its baseline. Used to toggle ablation variants
+    # (wl1/wl2/wl3, stratify, blocks_MBA1, num_feature_layers,
+    # use_skip_cross_attention, etc.) without editing code.
+    args.model_overrides = cfg.get('model', {}).get('overrides', {}) or {}
+    # testing scheme (LOFO/LOSO/production) from YAML
+    yaml_testing = cfg.get('training', {}).get('testing')
+    if yaml_testing and args.testing == 'LOFO':
+        args.testing = yaml_testing
+
     print(f"Loaded config from: {args.config}")
+    if args.model_overrides:
+        print(f"Model overrides from YAML: {args.model_overrides}")
+else:
+    args.model_overrides = {}
 
 # Validate required args
 if not args.input_data_folder:
@@ -618,6 +632,11 @@ def train_pipeline(args):
 
     param_tuning_subject_id = "" #"US10001001"  # manual feed
     best_params = load_optuna_pretrained_best_params(optuna_best_param_path=param_tuning_output_folder)  # check params
+    # Apply YAML model.overrides (ablation knobs) on top of baseline best_params
+    if getattr(args, 'model_overrides', None):
+        for k, v in args.model_overrides.items():
+            print(f"  override: best_params['{k}'] = {v}  (was {best_params.get(k)!r})")
+            best_params[k] = v
     print("Best params selected: ", best_params)
     
     if 'nsucl' in dataset_name:

@@ -180,6 +180,8 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
             norm1 = best_params['norm1']
             norm2 = best_params['norm2']
             norm3 = best_params['norm3']
+            use_skip_cross_attention = best_params.get(
+                "use_skip_cross_attention", True)
             model = MBA_v1(input_tensor_size,
                            num_encoder_layers=num_encoder_layers,
                            num_decoder_layers=num_decoder_layers,
@@ -190,7 +192,8 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                            max_seq_len=max_seq_len,
                            num_filters=num_filters,
                            encoderlayer=featurelayer,
-                           norm1=norm1, norm2=norm2, norm3=norm3)
+                           norm1=norm1, norm2=norm2, norm3=norm3,
+                           use_skip_cross_attention=use_skip_cross_attention)
         case "mbav1_pretrain":
             dropout_rate = best_params['dropout']
             drop_path_rate = best_params['droppath']

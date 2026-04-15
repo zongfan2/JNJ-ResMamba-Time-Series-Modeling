@@ -1,0 +1,45 @@
+# =============================================================================
+# Ablation — "w/o Mask Head" : drop the per-timestep sequence-labeling loss
+# =============================================================================
+# Corresponds to param_mba_v1 with wl2 = 0. The classification (wl1) and
+# severity regression (wl3) losses stay enabled, but the per-timestep mask
+# prediction head no longer contributes to the training objective.
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_no_mask_head.yaml
+
+experiment:
+  name: ablation_no_mask_head
+  description: "MBA_v1 trained without the per-timestep mask loss (wl2 = 0)."
+  task: scratch_detection
+  date: "2026-04-14"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/code/munge/predictive_modeling/std_scaler_3s.bin
+
+model:
+  architecture: mbav1
+  overrides:
+    wl2: 0.0  # disable mask-prediction loss contribution
+
+training:
+  output: ablation-no_mask_head-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

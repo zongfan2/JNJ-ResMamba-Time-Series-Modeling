@@ -1079,11 +1079,13 @@ class MBA_v1(nn.Module):
                  num_decoder_layers=3, drop_path_rate=0.3,
                  kernel_size_encoder=3, kernel_size_decoder=7,
                  dropout_rate=0.2, max_seq_len=1220,
-                 encoderlayer="TCN", norm1='IN', norm2='IN', norm3='BN'):
+                 encoderlayer="TCN", norm1='IN', norm2='IN', norm3='BN',
+                 use_skip_cross_attention=True):
         super(MBA_v1, self).__init__()
         self.input_projection = ConvProjection(input_dim, num_filters, norm1)
         self.cls_token = nn.Parameter(torch.randn(1, num_filters, 1))
         self.num_encoder_layers = num_encoder_layers
+        self.use_skip_cross_attention = use_skip_cross_attention
 
         self.encoder = FeatureExtractor(
             tsm_horizon=64,
@@ -1140,7 +1142,7 @@ class MBA_v1(nn.Module):
         x = self.positional_encoding(x)
 
         # Decoder with U-Net skip connections
-        if self.num_encoder_layers > 0:
+        if self.num_encoder_layers > 0 and self.use_skip_cross_attention:
             for i, layer in enumerate(self.decoder):
                 if i < len(feature_maps):
                     skip_idx = len(feature_maps) - 1 - i

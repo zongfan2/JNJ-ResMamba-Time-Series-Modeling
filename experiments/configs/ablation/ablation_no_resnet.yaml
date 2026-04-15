@@ -1,0 +1,45 @@
+# =============================================================================
+# Ablation — "w/o ResNet Mapping" : input projection feeds the Mamba decoder
+# =============================================================================
+# Sets num_feature_layers = 0, removing the ResNet/TCN encoder stack. The
+# input projection feeds the Mamba decoder directly, and U-shaped skip
+# connections collapse (there are no encoder feature maps to skip from).
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_no_resnet.yaml
+
+experiment:
+  name: ablation_no_resnet
+  description: "MBA_v1 with the ResNet encoder removed (num_feature_layers = 0)."
+  task: scratch_detection
+  date: "2026-04-14"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/code/munge/predictive_modeling/std_scaler_3s.bin
+
+model:
+  architecture: mbav1
+  overrides:
+    num_feature_layers: 0  # skip the ResNet encoder entirely
+
+training:
+  output: ablation-no_resnet-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

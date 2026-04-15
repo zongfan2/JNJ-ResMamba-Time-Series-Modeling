@@ -157,6 +157,11 @@ def batch_generator(df,batch_size=128,stratify=False,shuffle=True,seg_column='se
             np.random.shuffle(segs)
         for i in range(0,len(segs),batch_size):
             seg_choice=segs[i:i+batch_size]
+            # BatchNorm1d rejects batches of size 1 in training mode.
+            # Drop the trailing singleton batch that can occur in the
+            # natural-sampling path.
+            if len(seg_choice) < 2:
+                continue
             steps +=1
             yield df[df[seg_column].isin(seg_choice)]
             
@@ -253,6 +258,8 @@ def get_nb_steps(df,batch_size=128,stratify=False,shuffle=True,seg_column='segme
             np.random.shuffle(segs)
         for i in range(0,len(segs),batch_size):
             seg_choice=segs[i:i+batch_size]
+            if len(seg_choice) < 2:
+                continue
             steps +=1
     return steps
 

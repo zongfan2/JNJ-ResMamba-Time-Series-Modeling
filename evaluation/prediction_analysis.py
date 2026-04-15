@@ -95,12 +95,218 @@ def get_metrics(df, suffix):
         f'F1_2_{suffix}': metrics.f1_score(df.gt2, df.pr2, zero_division=0) * 100,
         f'R2_{suffix}': metrics.r2_score(segments_df.gt3, segments_df.pr3),
         f'R2_2{suffix}': metrics.r2_score(segments_df.gt3, segments_df.pr3_2),
+        f'MAE_{suffix}': metrics.mean_absolute_error(segments_df.gt3, segments_df.pr3),
         f'F1_rand_{suffix}': metrics.f1_score(segments_df.gt1, segments_df.pr1_rand, zero_division=0) * 100,
         f'Recall_rand_{suffix}': metrics.recall_score(segments_df.gt1, segments_df.pr1_rand, zero_division=0) * 100,
         f'Precision_rand_{suffix}': metrics.precision_score(segments_df.gt1, segments_df.pr1_rand, zero_division=0) * 100,
         f'ROC_AUC_rand_{suffix}': metrics.roc_auc_score(segments_df.gt1, segments_df.pr1_rand) * 100,
         f'R2_rand_{suffix}': metrics.r2_score(segments_df.gt3, segments_df.pr3_rand)
     })
+
+
+# ============================================================================
+# Paper-table helpers
+# ----------------------------------------------------------------------------
+# These helpers produce the exact metrics reported in
+# papers/deep_scratch/deepscratch.tex Tables 2 (main results) and 3
+# (ablation results).
+#
+# Reported metrics per variant, aggregated as mean ± std over LOFO folds:
+#   F1 [%], Precision [%], Recall [%], AUROC [%], R^2, MAE [s]
+#
+# Each LOFO run produces one `Y_test_Y_pred_<FOLD>.csv` per fold under
+#   <results_folder>/<output_name>/training/predictions/
+# where <output_name> is the `training.output` value from the variant's
+# YAML. `get_predictions` tags each row with its fold via the `subject`
+# column; we group on it to compute per-fold metrics.
+# ============================================================================
+
+
+PAPER_METRIC_COLS = ['F1', 'Precision', 'Recall', 'AUROC', 'R2', 'MAE']
+
+
+def compute_paper_metrics(segments_df):
+    """Compute the six paper-table metrics on a segment-level DataFrame."""
+    return {
+        'F1':        metrics.f1_score(segments_df.gt1, segments_df.pr1, zero_division=0) * 100,
+        'Precision': metrics.precision_score(segments_df.gt1, segments_df.pr1, zero_division=0) * 100,
+        'Recall':    metrics.recall_score(segments_df.gt1, segments_df.pr1, zero_division=0) * 100,
+        'AUROC':     metrics.roc_auc_score(segments_df.gt1, segments_df.pr1) * 100,
+        'R2':        metrics.r2_score(segments_df.gt3, segments_df.pr3),
+        'MAE':       metrics.mean_absolute_error(segments_df.gt3, segments_df.pr3),
+    }
+
+
+def compute_per_fold_metrics(dfp):
+    """Compute paper metrics per held-out fold.
+
+    Rest-frame rows (added by ``get_predictions`` with no ``subject`` tag)
+    are excluded so the metric sees only actual test segments.
+    """
+    dfp = dfp[dfp['subject'].notna()]
+    rows = []
+    for fold, fdf in dfp.groupby('subject'):
+        seg = fdf.groupby('segment').max(1)
+        if len(seg) < 2 or seg.gt1.nunique() < 2:
+            print(f"  [paper] fold={fold}: skipped "
+                  f"(n_segments={len(seg)}, gt_classes={seg.gt1.nunique()})")
+            continue
+        row = {'fold': fold, 'n_segments': len(seg)}
+        row.update(compute_paper_metrics(seg))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def build_variant_results(variant_label, model_name, folder_path, df_rest):
+    """Load a variant's LOFO predictions and return one summary row.
+
+    Returns a dict with mean and std of each paper metric, plus the raw
+    per-fold DataFrame for downstream inspection.
+    """
+    dfp = get_predictions(folder_path, model_name, df_rest, filter_tso=True)
+    if len(dfp) == 0:
+        print(f"  [paper] {variant_label!r}: no predictions found under "
+              f"{os.path.join(folder_path, model_name)}")
+        return None, None
+
+    # Mirror the segment-level derived columns from main().
+    dfp.loc[:, 'pr3_2'] = dfp.groupby('segment')['pr2'].transform('sum')
+    dfp['pr1_2'] = 0
+    dfp.loc[dfp['pr3_2'] > 20, 'pr1_2'] = 1
+    dfp.loc[:, 'length'] = dfp.groupby('segment')['pr2'].transform('count')
+    dfp['gt3'] = (dfp['gt3'] * dfp['length']) / 20
+    dfp['pr3'] = (dfp['pr3'] * dfp['length']) / 20
+    dfp.loc[dfp.pr1 == 0, ['pr3', 'pr3_2']] = 0
+    dfp.loc[dfp.pr3 < 0, ['pr3']] = 0
+
+    per_fold = compute_per_fold_metrics(dfp)
+    if per_fold.empty:
+        print(f"  [paper] {variant_label!r}: no usable folds")
+        return None, None
+
+    summary = {'variant': variant_label, 'n_folds': len(per_fold)}
+    for col in PAPER_METRIC_COLS:
+        summary[f'{col}_mean'] = per_fold[col].mean()
+        summary[f'{col}_std'] = per_fold[col].std(ddof=1) if len(per_fold) > 1 else 0.0
+    return summary, per_fold
+
+
+def _fmt(mean, std, digits=2):
+    """Format a mean ± std cell with the paper's precision."""
+    return f"{mean:.{digits}f} $\\pm$ {std:.{digits}f}"
+
+
+def to_latex_ablation(df, out_path, full_label='Full'):
+    """Emit a LaTeX snippet matching papers/deep_scratch tab:ablation_results.
+
+    Rows include F1, ΔF1 (vs. the Full variant), and R^2.
+    """
+    full_row = df[df['variant'].str.lower().str.contains(full_label.lower())]
+    full_f1 = full_row['F1_mean'].iloc[0] if not full_row.empty else df['F1_mean'].iloc[0]
+
+    lines = [
+        r"% Auto-generated by evaluation/prediction_analysis.py",
+        r"\begin{tabular}{lccc}",
+        r"    \toprule",
+        r"    Variant & F1 & $\Delta$F1 & R\textsuperscript{2} \\",
+        r"    \midrule",
+    ]
+    for _, row in df.iterrows():
+        delta = row['F1_mean'] - full_f1
+        delta_str = "---" if abs(delta) < 1e-9 else f"{delta:+.2f}"
+        r2_str = _fmt(row['R2_mean'], row['R2_std'], digits=3)
+        f1_str = _fmt(row['F1_mean'], row['F1_std'])
+        lines.append(f"    {row['variant']} & {f1_str} & {delta_str} & {r2_str} \\\\")
+    lines += [r"    \bottomrule", r"\end{tabular}"]
+    with open(out_path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f"  [paper] ablation LaTeX written to {out_path}")
+
+
+def to_latex_main_results(df, out_path):
+    """Emit a LaTeX snippet matching papers/deep_scratch tab:main_results."""
+    lines = [
+        r"% Auto-generated by evaluation/prediction_analysis.py",
+        r"\begin{tabular}{lcccccc}",
+        r"    \toprule",
+        r"    \multirow{2}{*}{Model} & \multicolumn{4}{c}{Classification} & \multicolumn{2}{c}{Regression} \\",
+        r"    \cmidrule(lr){2-5} \cmidrule(lr){6-7}",
+        r"    & F1 & Precision & Recall & AUROC & R\textsuperscript{2} & MAE (s) \\",
+        r"    \midrule",
+    ]
+    for _, row in df.iterrows():
+        lines.append(
+            f"    {row['variant']} "
+            f"& {_fmt(row['F1_mean'], row['F1_std'])} "
+            f"& {_fmt(row['Precision_mean'], row['Precision_std'])} "
+            f"& {_fmt(row['Recall_mean'], row['Recall_std'])} "
+            f"& {_fmt(row['AUROC_mean'], row['AUROC_std'])} "
+            f"& {_fmt(row['R2_mean'], row['R2_std'], digits=3)} "
+            f"& {_fmt(row['MAE_mean'], row['MAE_std'])} \\\\"
+        )
+    lines += [r"    \bottomrule", r"\end{tabular}"]
+    with open(out_path, 'w') as f:
+        f.write('\n'.join(lines) + '\n')
+    print(f"  [paper] main-results LaTeX written to {out_path}")
+
+
+def generate_paper_tables(variants, folder_path, df_rest, out_dir,
+                          full_label='Full', table_kind='ablation'):
+    """Build a paper-ready table from {variant_label: output_name} dict.
+
+    Args:
+        variants: ordered dict mapping the row label used in the paper
+            (e.g. "Full", "w/o Mask Head") to the ``training.output`` name
+            for that run (e.g. "ablation-full-no_pretrain-bs32-fold4").
+        folder_path: absolute path of the dataset's DL results root, e.g.
+            ``/mnt/data/GENEActive-featurized/results/DL/<dataset_name>/``.
+        df_rest: DataFrame loaded via ``load_dataset`` for the same dataset.
+        out_dir: directory where CSV + LaTeX snippets will be written.
+        full_label: which row to compute ΔF1 from (ablation only).
+        table_kind: 'ablation' or 'main' — picks the LaTeX template.
+
+    Returns:
+        (summary_df, per_fold_dict) — summary_df has one row per variant
+        with mean+std of each paper metric; per_fold_dict maps variant
+        label → per-fold DataFrame for downstream analysis.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    summary_rows = []
+    per_fold_dict = {}
+    for label, model_name in variants.items():
+        print(f"\n[paper] variant={label!r}  output={model_name!r}")
+        summary, per_fold = build_variant_results(
+            label, model_name, folder_path, df_rest,
+        )
+        if summary is None:
+            continue
+        summary_rows.append(summary)
+        per_fold_dict[label] = per_fold
+
+    if not summary_rows:
+        print("[paper] no variants produced metrics — nothing to write.")
+        return None, per_fold_dict
+
+    summary_df = pd.DataFrame(summary_rows)
+    csv_path = os.path.join(out_dir, f'{table_kind}_table.csv')
+    summary_df.to_csv(csv_path, index=False)
+    print(f"[paper] summary CSV written to {csv_path}")
+
+    # Optional per-fold dump for reproducibility and error-bar computation.
+    folds_path = os.path.join(out_dir, f'{table_kind}_per_fold.csv')
+    pd.concat(
+        [df.assign(variant=label) for label, df in per_fold_dict.items()],
+        ignore_index=True,
+    ).to_csv(folds_path, index=False)
+    print(f"[paper] per-fold CSV written to {folds_path}")
+
+    tex_path = os.path.join(out_dir, f'{table_kind}_table.tex')
+    if table_kind == 'ablation':
+        to_latex_ablation(summary_df, tex_path, full_label=full_label)
+    elif table_kind == 'main':
+        to_latex_main_results(summary_df, tex_path)
+
+    return summary_df, per_fold_dict
 
 
 def plot_confusion_matrix(y_test, y_pred, model, output_filepath=""):
@@ -376,32 +582,156 @@ def print_dataset_statistics(df_rest, dataset_name):
 
 
 def main():
-    """Main execution function for model evaluation and analysis."""
+    """Main execution function for model evaluation and analysis.
 
-    # ========================================================================
-    # CONFIGURATION: Define datasets and model-dataset mappings
-    # ========================================================================
+    Two modes, selected with ``--mode``:
 
-    # Define all datasets to load
-    # Format: {dataset_key: data_folder_path}
+      * ``paper-ablation`` (default): builds the Deep Scratch ablation table
+        (papers/deep_scratch tab:ablation_results) from the nine ablation
+        runs produced by ``experiments/run_ablation.sh``.
+      * ``paper-main``: builds the main-results table (baselines + ours).
+      * ``legacy``: preserves the original dataset-sweep + per-patient
+        analysis flow from before the paper-table rewrite.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', type=str, default='paper-ablation',
+                        choices=['paper-ablation', 'paper-main', 'legacy'])
+    parser.add_argument('--train_data', type=str,
+                        default='/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/',
+                        help='Raw data folder used by the ablation runs '
+                             '(matches data.input_folder in the ablation YAMLs).')
+    parser.add_argument('--out_dir', type=str,
+                        default='experiments/logs/paper_tables/',
+                        help='Where CSV + LaTeX table snippets are written.')
+    cli_args, _ = parser.parse_known_args()
+
+    if cli_args.mode == 'paper-ablation':
+        return run_paper_ablation(cli_args)
+    if cli_args.mode == 'paper-main':
+        return run_paper_main_results(cli_args)
+    return run_legacy(cli_args)
+
+
+# ----------------------------------------------------------------------------
+# Paper-ablation driver
+# ----------------------------------------------------------------------------
+# Variant labels here match the row names in
+# papers/deep_scratch/deepscratch.tex Table 3 (tab:ablation_results).
+# The output-folder names (values) match the ``training.output`` field in
+# experiments/configs/ablation/ablation_*.yaml.
+# ----------------------------------------------------------------------------
+
+ABLATION_VARIANTS = {
+    'Ours (w/o pretrain)':      'ablation-full-no_pretrain-bs32-fold4',
+    # Pretraining variants — runs pending; uncomment once the jobs finish:
+    # 'Ours (w/ DINO pretrain)':  'ablation-full-dino_pretrain-bs32-fold4',
+    # 'Ours (w/ MAE pretrain)':   'ablation-full-mae_pretrain-bs32-fold4',
+    'w/o Mask Head':            'ablation-no_mask_head-bs32-fold4',
+    'w/o Mamba Encoder':        'ablation-no_mamba-bs32-fold4',
+    'w/o ResNet Mapping':       'ablation-no_resnet-bs32-fold4',
+    'w/o Cross-Attention':      'ablation-no_cross_attn-bs32-fold4',
+    'w/o Balanced Sampling':    'ablation-no_balanced-bs32-fold4',
+    'Single-Task (Cls Only)':   'ablation-cls_only-bs32-fold4',
+}
+
+
+def run_paper_ablation(args):
+    """Build the ablation-study table from the nine ablation runs."""
+    print("=" * 80)
+    print("PAPER TABLE: Deep Scratch Ablation Study")
+    print("=" * 80)
+
+    df_rest, dataset_name = load_dataset(args.train_data, energy_threshold=5)
+    folder_path = (
+        f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/"
+    )
+    print(f"Dataset:     {dataset_name}")
+    print(f"Looking for runs under: {folder_path}")
+
+    summary_df, _ = generate_paper_tables(
+        variants=ABLATION_VARIANTS,
+        folder_path=folder_path,
+        df_rest=df_rest,
+        out_dir=args.out_dir,
+        full_label='Ours (w/o pretrain)',  # ΔF1 reference row
+        table_kind='ablation',
+    )
+    if summary_df is not None:
+        cols = ['variant', 'n_folds'] + [
+            f'{m}_{s}' for m in PAPER_METRIC_COLS for s in ('mean', 'std')
+        ]
+        print("\nAblation summary:")
+        print(summary_df[cols].to_string(index=False))
+    return summary_df
+
+
+# ----------------------------------------------------------------------------
+# Paper main-results driver
+# ----------------------------------------------------------------------------
+# Baselines + ours on the same 4-fold LOFO split.  Populate the output
+# names as the baseline runs finish — defaults below match the naming
+# convention used by train_scratch.py's results_folder_name.
+# ----------------------------------------------------------------------------
+
+MAIN_RESULTS_VARIANTS = {
+    'ResNet1D':      'ns_detect-resnet1d-bs32-fold4',
+    'MTCNA2':        'ns_detect-mtcna2-bs32-fold4',
+    'PatchTST':      'ns_detect-patchtst-bs32-fold4',
+    'EfficientUNet': 'ns_detect-efficientunet-bs32-fold4',
+    'Conv1DTS':      'ns_detect-conv1dts-bs32-fold4',
+    r'\model{} (Ours)': 'ablation-full-dino_pretrain-bs32-fold4',
+}
+
+
+def run_paper_main_results(args):
+    """Build the main-results table from baselines + our best variant."""
+    print("=" * 80)
+    print("PAPER TABLE: Main Results (Baselines + Ours)")
+    print("=" * 80)
+
+    df_rest, dataset_name = load_dataset(args.train_data, energy_threshold=5)
+    folder_path = (
+        f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/"
+    )
+    print(f"Dataset:     {dataset_name}")
+    print(f"Looking for runs under: {folder_path}")
+
+    summary_df, _ = generate_paper_tables(
+        variants=MAIN_RESULTS_VARIANTS,
+        folder_path=folder_path,
+        df_rest=df_rest,
+        out_dir=args.out_dir,
+        table_kind='main',
+    )
+    if summary_df is not None:
+        cols = ['variant', 'n_folds'] + [
+            f'{m}_{s}' for m in PAPER_METRIC_COLS for s in ('mean', 'std')
+        ]
+        print("\nMain-results summary:")
+        print(summary_df[cols].to_string(index=False))
+    return summary_df
+
+
+# ----------------------------------------------------------------------------
+# Legacy multi-dataset sweep (preserved from the pre-paper version)
+# ----------------------------------------------------------------------------
+
+def run_legacy(args):
+    """Original behavior: iterate datasets_config + models_config."""
+
     datasets_config = {
-        # 'dataset1': '/mnt/data/Nocturnal-scratch/gene_20hz_3s_b1s_st18_ori_van_nw60nomerg_gap120_slp60_ORtp25_enha/raw',
         'dataset2': '/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_test_scratch/test_tso_preprocess/raw',
-        'dataset3': '/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_test_scratch/DeepTSO-JNJ/raw'
+        'dataset3': '/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_test_scratch/DeepTSO-JNJ/raw',
     }
     folder_path = "/mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ/"
-    # folder_path2 = ""
 
-    # Define model configurations
-    # Format: {model_name: {'results_folder': path, 'dataset': dataset_key}}
     models_config = {
-
         'ns_detect-mbatsm-bs=32-param16-DeepTSO-UKB': {
-            # 'results_folder': '/mnt/data/GENEActive-featurized/results/DL/gene_20hz_3s_b1s_st18_ori_van_nw60nomerg_gap120_slp60_ORtp25_enh/',
             'results_folder': folder_path,
             'dataset': 'dataset2',
         },
-        # Add more models as needed:
         'ns_detect-mbatsm-bs=32-param16-DeepTSO-JNJ': {
             'results_folder': folder_path,
             'dataset': 'dataset3',

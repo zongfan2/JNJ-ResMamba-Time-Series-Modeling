@@ -9,7 +9,7 @@ experiment:
 data:
   input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
   format: folder
-  scaler_path: /mnt/code/munge/predictive_modeling/std_scaler_3s.bin
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
   # Alternative data folders (uncomment to switch):
   # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_2s_b1s_imerit/
   # input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_2s_b1s_imerit_sleep_nonwearOR/raw/

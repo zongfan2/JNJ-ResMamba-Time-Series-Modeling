@@ -12,6 +12,15 @@ for scratch detection models on wearable sensor data.
 # result = subprocess.run(shell_script, shell=True, capture_output=True, text=True)
 
 import os
+import sys
+
+# Allow running as `python evaluation/prediction_analysis.py` from the repo
+# root: put the project root on sys.path so `data.loading` resolves.
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_PROJECT_ROOT = os.path.dirname(_SCRIPT_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt

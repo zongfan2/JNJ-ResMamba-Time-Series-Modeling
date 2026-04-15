@@ -28,7 +28,8 @@ import seaborn as sns
 from sklearn import metrics
 from scipy.stats import pearsonr
 
-from data.loading import load_data, create_folder
+from data.loading import load_data
+from utils.common import create_folder
 
 
 def get_predictions(folder_path, model, df_rest, filter_tso=False):

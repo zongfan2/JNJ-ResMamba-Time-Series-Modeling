@@ -336,6 +336,24 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
     elif table_kind == 'main':
         to_latex_main_results(summary_df, tex_path)
 
+    # Print final summary table with both mean±std and pooled F1
+    print("\n" + "=" * 100)
+    print(f"  PAPER TABLE SUMMARY ({table_kind})")
+    print("=" * 100)
+    header = f"{'Variant':<35} {'F1 (mean±std)':>15} {'F1 (pooled)':>13} {'Precision':>15} {'Recall':>15} {'AUROC':>15} {'R2':>12} {'MAE':>12}"
+    print(header)
+    print("-" * 100)
+    for _, row in summary_df.iterrows():
+        f1_str = f"{row['F1_mean']:.2f}±{row['F1_std']:.2f}"
+        f1_pooled = f"{row['F1_pooled']:.2f}" if 'F1_pooled' in row and pd.notna(row.get('F1_pooled')) else "N/A"
+        prec_str = f"{row['Precision_mean']:.2f}±{row['Precision_std']:.2f}"
+        rec_str = f"{row['Recall_mean']:.2f}±{row['Recall_std']:.2f}"
+        auroc_str = f"{row['AUROC_mean']:.2f}±{row['AUROC_std']:.2f}"
+        r2_str = f"{row['R2_mean']:.3f}±{row['R2_std']:.3f}"
+        mae_str = f"{row['MAE_mean']:.3f}±{row['MAE_std']:.3f}"
+        print(f"{row['variant']:<35} {f1_str:>15} {f1_pooled:>13} {prec_str:>15} {rec_str:>15} {auroc_str:>15} {r2_str:>12} {mae_str:>12}")
+    print("=" * 100)
+
     return summary_df, per_fold_dict
 
 

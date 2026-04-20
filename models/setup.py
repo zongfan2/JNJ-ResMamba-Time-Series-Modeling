@@ -11,10 +11,10 @@ from transformers import PatchTSTConfig, PatchTSTModel
 
 # Import all models from submodules
 from .baselines import (
-    RNN, BiRNN, CNN, ResidualBlock, ResCNN_old, MLP, ResCNN, 
-    LSTMModel, TCNLayer, ResTCNLayer, BiTCNLayer, MTCN, 
+    RNN, BiRNN, CNN, ResidualBlock, ResCNN_old, MLP, ResCNN,
+    LSTMModel, TCNLayer, ResTCNLayer, BiTCNLayer, MTCN,
     PositionalEmbedding, MTCNA2, BiMTCN, BiMambaEncoder,
-    tcn_learner, mba_learner, hybrid
+    tcn_learner, mba_learner, hybrid, BiLSTMMultiTask
 )
 from .mamba_blocks import MBA, ConvFeedForward, AffineDropPath, MaskMambaBlock, drop_path
 from .attention import (
@@ -474,6 +474,17 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                           supcon_loss=supcon_loss,
                           use_embedding=True
                           )
+        case "bilstm":
+            hidden_size = best_params.get("hidden_size", 256)
+            num_lstm_layers = best_params.get("num_lstm_layers", 3)
+            dropout_rate = best_params.get("dropout", 0.2)
+            model = BiLSTMMultiTask(
+                in_channels=input_tensor_size,
+                hidden_size=hidden_size,
+                num_layers=num_lstm_layers,
+                dropout=dropout_rate,
+                max_seq_len=max_seq_len,
+            )
         case "conv1dts":
             prediction_length = max_seq_len
             input_dim = 3

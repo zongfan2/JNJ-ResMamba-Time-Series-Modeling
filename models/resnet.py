@@ -208,33 +208,27 @@ class ResNet1D(nn.Module):
 
         return nn.Sequential(*layers)
     
-    def forward(self, x: torch.Tensor, labels1: Optional[torch.Tensor]=None, labels3: Optional[torch.Tensor]=None, apply_mixup: bool=False, mixup_alpha: float=0.2, **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, x_lengths=None, labels1: Optional[torch.Tensor]=None, labels3: Optional[torch.Tensor]=None, apply_mixup: bool=False, mixup_alpha: float=0.2, **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through ResNet1D
-        
+
         Args:
-            x: Input tensor of shape [B, C, L]
-                B = batch size, C = channels, L = sequence length
-                
-        Returns:
-            classification_output: Classification output
-            mask_prediction_output: Mask prediction output
-            regression_output: Regression output
+            x: Input tensor of shape [B, L, C]
+            x_lengths: Original sequence lengths (for masking out2)
         """
+        batch_size, seq_len, channels = x.size()
         x = x.permute(0, 2, 1)
         # Input projection
         x = self.input_projection(x)
-        
+
         # Process through ResNet blocks
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
         x = self.layer4(x)
-        
+
         # Get pooled features
         pooled = self.global_avg_pool(x).squeeze(-1)
-        # features = self.dropout(features)
-        # Task-specific outputs
 
         if apply_mixup and self.training:
             mixed_features, mixed_labels1, mixed_labels3, mixup_lambda = latent_mixup(
@@ -244,22 +238,29 @@ class ResNet1D(nn.Module):
         else:
             mixed_features = pooled
             mixup_info = None
-        
+
         # Classification output
         classification_output = self.classification_head(mixed_features)
         if self.return_contrastive_embedding:
-            con_embed = self.pooled
+            con_embed = pooled
         else:
             con_embed = None
-        
-        # Mask prediction output
+
+        # Mask prediction output [B, mask_length]
         mask_output = self.mask_prediction_head(mixed_features)
-        
+
+        # Flatten and keep only valid positions (matching MBA_v1 convention)
+        if x_lengths is not None:
+            mask = torch.arange(seq_len, device=x.device).unsqueeze(0) < torch.tensor(
+                x_lengths, device=x.device, dtype=torch.long
+            ).unsqueeze(1)
+            mask_output = mask_output.view(-1)[mask.view(-1)]
+
         # Regression output
         regression_output = self.regression_head(mixed_features)
-        
+
         attn = None
-        return classification_output,  mask_output, regression_output, attn, con_embed, mixup_info
+        return classification_output, mask_output, regression_output, attn, con_embed, mixup_info
 
 
 class ResBlock1D(nn.Module):

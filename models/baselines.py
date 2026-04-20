@@ -5,7 +5,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils import weight_norm
 from typing import Optional, Tuple
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import numpy as np
+
+from .resmamba import create_mask
+from .attention import GatedAttentionPoolingMIL
 
 
 # Baseline and legacy models
@@ -452,7 +456,8 @@ class MTCNA2(nn.Module): #Multi Task TCN
         self.out2 = nn.Conv1d(num_filters, num_classes, kernel_size=1)  # Output the class probabilities for each time step
         self.out3 = nn.Linear(num_filters, 1)
         
-    def forward(self, x, x_lengths): 
+    def forward(self, x, x_lengths, labels1=None, labels3=None,
+                apply_mixup=False, mixup_alpha=0.2):
         batch_size, seq_len, _ = x.size()
         x=self.embedding(x)
         cls_token = self.cls_token.expand(batch_size, -1, -1)  # Shape: (batch_size, 1, embed_dim)
@@ -464,30 +469,22 @@ class MTCNA2(nn.Module): #Multi Task TCN
         # Concatenate the positional embeddings with the original input
         x = torch.cat([x, pos_embed], dim=-1)  # (batch_size, seq_len, input_size + embedding_dim)
         x=x.permute(0, 2, 1) # Convert to (batch_size, input_dim, seq_len) for TCN processing
-#         x = self.feature_extractor(x)
         x = self.tcn(x)
-#         mask = create_mask(torch.tensor(x_lengths,device=x.device), seq_len+1,batch_size,x.device)
-#         masked=masked_avg_pool(x.permute(0,2,1), mask)
-        
-#         cls_output = x[:, :, 0]  # [batch_size, num_filters]
-#         x1 = self.fc1(masked)#self.fc1(cls_output)
-#         x2 = self.fc2(x)
-#         x3= self.fr_duration(masked)#self.fr_duration(cls_output)
-        
+
         mask = create_mask(torch.tensor(x_lengths,device=x.device), seq_len+1,batch_size,x.device)
         masked= self.GatedAttentionMILPooling(x.permute(0, 2, 1), mask)
         x1 = self.out1(masked)
         x2 = self.out2(x) #use .permute(0, 2, 1) if we want to use conv1d in output
         x3= self.out3(masked)
-        
-        
-        #if x1 is 0 then duration should be 0
-#         mask_x1 =torch.round(torch.sigmoid(x1))
-#         x3 = x3 * (mask_x1 != 0).float()
-        
-        x2=x2[:, :, 1:]# Output sequence excludes the classification token, we return from 1 onwards
-        x2 = x2.permute(0, 2, 1) # change shape to batch,sequence,output
-        return x1,x2,x3 # Output sequence excludes the classification token, we return from 1 onwards
+
+        x2=x2[:, :, 1:]# Output sequence excludes the classification token
+        x2 = x2.permute(0, 2, 1) # [B, seq_len, 1]
+
+        # Flatten and keep only valid positions (matching MBA_v1 convention)
+        mask_flat = mask[:, 1:].reshape(-1).bool()
+        x2 = x2.reshape(-1)[mask_flat]
+
+        return x1, x2, x3, None, None, None
 
     
 ########################## Bidirectional TCN
@@ -668,5 +665,98 @@ class hybrid(nn.Module):
         x2 = self.out2(x_out[:, 1:, :]) #use .permute(0, 2, 1) if we want to use conv1d in output
         x3= self.out3(masked)
         return x1,x2,x3
+
+
+class BiLSTMMultiTask(nn.Module):
+    """
+    Bidirectional LSTM baseline with multi-task output heads.
+    Matches the 6-value return interface expected by train_scratch.py:
+        (out1, out2, out3, att, contrastive_embedding, mixup_info)
+    """
+
+    def __init__(
+        self,
+        in_channels: int = 3,
+        hidden_size: int = 256,
+        num_layers: int = 3,
+        dropout: float = 0.2,
+        max_seq_len: int = 1221,
+    ):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        hidden_dim = hidden_size * 2  # bidirectional
+
+        self.lstm = nn.LSTM(
+            in_channels, hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            dropout=dropout if num_layers > 1 else 0,
+            bidirectional=True,
+        )
+
+        # Attention pooling over time (CLS-like aggregation)
+        self.attn_pool = nn.Linear(hidden_dim, 1)
+
+        # Task heads
+        self.out1 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        self.out3 = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, 1),
+        )
+        # Per-timestep mask prediction
+        self.out2 = nn.Conv1d(hidden_dim, 1, kernel_size=1)
+
+    def forward(self, x, x_lengths, labels1=None, labels3=None,
+                apply_mixup=False, mixup_alpha=0.2):
+        """
+        Args:
+            x: [B, L, C] padded input
+            x_lengths: original sequence lengths (list / ndarray / tensor)
+        Returns:
+            out1: [B, 1] classification logit
+            out2: [N_valid] flattened mask predictions for valid positions
+            out3: [B, 1] regression value
+            att, contrastive_embedding, mixup_info: None (unused)
+        """
+        batch_size, seq_len, _ = x.size()
+
+        # Build validity mask  [B, L]
+        lens = torch.as_tensor(x_lengths, dtype=torch.long, device=x.device)
+        mask = torch.arange(seq_len, device=x.device).unsqueeze(0) < lens.unsqueeze(1)
+
+        # Pack → LSTM → unpack
+        packed = pack_padded_sequence(
+            x, lens.cpu().clamp(min=1), batch_first=True, enforce_sorted=False
+        )
+        lstm_out, _ = self.lstm(packed)
+        lstm_out, _ = pad_packed_sequence(
+            lstm_out, batch_first=True, total_length=seq_len
+        )
+        # lstm_out: [B, L, hidden_dim]
+
+        # Attention pooling for classification / regression
+        attn_scores = self.attn_pool(lstm_out).squeeze(-1)        # [B, L]
+        attn_scores = attn_scores.masked_fill(~mask, float('-inf'))
+        attn_weights = F.softmax(attn_scores, dim=1).unsqueeze(1) # [B, 1, L]
+        pooled = torch.bmm(attn_weights, lstm_out).squeeze(1)     # [B, hidden_dim]
+
+        out1 = self.out1(pooled)   # [B, 1]
+        out3 = self.out3(pooled)   # [B, 1]
+
+        # Per-timestep mask prediction
+        out2 = self.out2(lstm_out.permute(0, 2, 1)).squeeze(1)    # [B, L]
+
+        # Flatten and keep only valid positions (matches MBA_v1 convention)
+        out2 = out2.view(-1)[mask.view(-1)]
+
+        return out1, out2, out3, None, None, None
 
 

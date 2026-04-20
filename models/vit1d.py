@@ -511,20 +511,21 @@ class ViT1D(nn.Module):
         # Return final output and intermediate features
         return x, encoder_outputs
     
-    def forward(self, x,  apply_mask: bool = True, **kwargs):
+    def forward(self, x, x_lengths=None, labels1=None, labels3=None,
+                apply_mixup=False, mixup_alpha=0.2):
         # forward using input x
         assert x.dim() == 3, "Input must be of shape [B, L, C]"
         x = x.permute(0, 2, 1)  # [B, C, L]
-        
+
         x, attention_mask = self.embedding(x)  # [B, 1+num_patches, embed_dim]
-        if not apply_mask:
-            attention_mask = None
-            
+
         # Apply encoder layers
         x, _ = self.forward_embedding(x, attention_mask)
-        
+
         # Predict using CLS token (first token)
-        output1, output2, output3, con_embed, mixup_info = self.predictor(x, **kwargs)
+        output1, output2, output3, con_embed, mixup_info = self.predictor(
+            x, labels=labels1, apply_mixup=apply_mixup, mixup_alpha=mixup_alpha
+        )
         attn = None
         return output1, output2, output3, attn, con_embed, mixup_info
         

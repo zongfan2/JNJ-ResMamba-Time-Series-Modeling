@@ -132,28 +132,27 @@ class Conv1DTS(nn.Module):
                 nn.AdaptiveAvgPool1d(mask_length)
             )
     
-    def forward(self, x: torch.Tensor, labels1: Optional[torch.Tensor]=None, labels3: Optional[torch.Tensor]=None, apply_mixup: bool=False, mixup_alpha: float=0.2, **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, x_lengths=None, labels1: Optional[torch.Tensor]=None, labels3: Optional[torch.Tensor]=None, apply_mixup: bool=False, mixup_alpha: float=0.2, **kwargs) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Forward pass through the Conv1D network.
-        
+
         Args:
-            x: Input tensor of shape [B, C, L]
-            
-        Returns:
-            Tuple of (classification_output, regression_output, mask_prediction)
+            x: Input tensor of shape [B, L, C]
+            x_lengths: Original sequence lengths (for masking out2)
         """
+        batch_size, seq_len, channels = x.size()
         # Initial projection
         x = x.permute(0, 2, 1)
 
         x = self.input_projection(x)
-        
+
         # Apply convolutional blocks
         for conv_block in self.conv_blocks:
             x = conv_block(x)
-        
+
         # Global pooling for classification and regression
         pooled = self.global_avg_pool(x).squeeze(-1)
-        
+
         # Task-specific outputs
         if apply_mixup and self.training:
             mixed_features, mixed_labels1, mixed_labels3, mixup_lambda = latent_mixup(
@@ -173,16 +172,21 @@ class Conv1DTS(nn.Module):
                 con_embed = pooled
             else:
                 con_embed = None
-            
-            # Mask prediction
+
+            # Mask prediction [B, mask_length]
             mask_output = self.mask_prediction(x).squeeze(1)
-            # else:
-            #     classification_output, mask_output, con_embed, mixup_info = None, None, None, None
+
+            # Flatten and keep only valid positions
+            if x_lengths is not None:
+                mask = torch.arange(seq_len, device=x.device).unsqueeze(0) < torch.tensor(
+                    x_lengths, device=x.device, dtype=torch.long
+                ).unsqueeze(1)
+                mask_output = mask_output.view(-1)[mask.view(-1)]
         else:
             classification_output, mask_output, con_embed = None, None, None
 
         attn = None
-        return classification_output,  mask_output, regression_output, attn, con_embed, mixup_info
+        return classification_output, mask_output, regression_output, attn, con_embed, mixup_info
 
     
     def _init_weights(self):

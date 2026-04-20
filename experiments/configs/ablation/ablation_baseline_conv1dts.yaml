@@ -1,0 +1,47 @@
+# =============================================================================
+# Baseline comparison — Conv1DTS (Dilated 1D CNN)
+# =============================================================================
+# Lightweight dilated 1D convolutional network with multi-task heads.
+# Same data / loss / CV setup as MBA_v1 ablation for fair comparison.
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_baseline_conv1dts.yaml
+
+experiment:
+  name: baseline_conv1dts
+  description: "Conv1DTS baseline — lightweight dilated 1D CNN."
+  task: scratch_detection
+  date: "2026-04-20"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+model:
+  architecture: conv1dts
+  overrides:
+    d_model: 64
+    num_layers: 4
+    average_mask: false
+    supcon_loss: false
+
+training:
+  output: baseline-conv1dts-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

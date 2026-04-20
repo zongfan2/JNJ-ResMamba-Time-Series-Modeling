@@ -131,16 +131,26 @@ class PatchTSTHead(nn.Module):
 class PatchTSTNS(nn.Module):
     def __init__(self, config: PatchTSTConfig, pretrained: bool=False):
         super(PatchTSTNS, self).__init__()
-        
+
         self.model = PatchTSTModel(config)
         # TODO: CONNECTION ERROR DUE TO FIREWALL
-        if pretrained: 
+        if pretrained:
             self.model.from_pretrained("namctin/patchtst_etth1_pretrain")
         self.head = PatchTSTHead(config)
-    
-    def forward(self, x, x_lengths, max_seq_len):
+        self._max_seq_len = config.context_length
+
+    def forward(self, x, x_lengths=None, labels1=None, labels3=None,
+                apply_mixup=False, mixup_alpha=0.2, max_seq_len=None):
+        # Derive max_seq_len from input shape if not provided
+        if max_seq_len is None:
+            max_seq_len = x.shape[1] if x.dim() == 3 else self._max_seq_len
         x = self.model(x)
-        return self.head(x["last_hidden_state"], x_lengths, max_seq_len)
+        head_out = self.head(x["last_hidden_state"], x_lengths, max_seq_len)
+        # PatchTSTHead returns (out1, out2, out3, attn) — extend to 6 values
+        if len(head_out) == 4:
+            out1, out2, out3, attn = head_out
+            return out1, out2, out3, attn, None, None
+        return head_out
 
 
 class PredictHead(nn.Module):

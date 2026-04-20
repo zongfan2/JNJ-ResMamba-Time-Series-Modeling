@@ -1,0 +1,45 @@
+# =============================================================================
+# Baseline comparison — ResNet1D (1D ResNet-18)
+# =============================================================================
+# Residual CNN baseline with 4 residual stages and multi-task heads.
+# Same data / loss / CV setup as MBA_v1 ablation for fair comparison.
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_baseline_resnet1d.yaml
+
+experiment:
+  name: baseline_resnet1d
+  description: "ResNet1D baseline — 1D ResNet-18 with multi-task heads."
+  task: scratch_detection
+  date: "2026-04-20"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+model:
+  architecture: resnet18_1d
+  overrides:
+    average_mask: false
+    supcon_loss: false
+
+training:
+  output: baseline-resnet1d-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

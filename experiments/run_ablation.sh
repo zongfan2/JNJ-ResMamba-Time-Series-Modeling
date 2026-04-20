@@ -24,6 +24,15 @@
 #   no_balanced           — stratify = false
 #   cls_only              — wl2 = wl3 = 0
 #
+# Baselines (comparison models):
+#   baseline_resnet1d     — 1D ResNet-18
+#   baseline_mtcna2       — Multi-Task TCN with Attention
+#   baseline_patchtst     — Patch Time Series Transformer
+#   baseline_efficientunet — EfficientNet U-Net
+#   baseline_conv1dts     — Dilated 1D CNN
+#   baseline_vit1d        — 1D Vision Transformer
+#   baseline_bilstm       — Bidirectional LSTM
+#
 # Extra CLI args after the variant are forwarded to train_scratch.py, e.g.:
 #   bash run_ablation.sh no_mamba --num_gpu 2
 
@@ -46,6 +55,13 @@ VALID_VARIANTS=(
     no_cross_attn
     no_balanced
     cls_only
+    baseline_resnet1d
+    baseline_mtcna2
+    baseline_patchtst
+    baseline_efficientunet
+    baseline_conv1dts
+    baseline_vit1d
+    baseline_bilstm
 )
 
 if [[ $# -lt 1 ]]; then

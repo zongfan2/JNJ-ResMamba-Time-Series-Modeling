@@ -491,8 +491,9 @@ class MTCNA2(nn.Module): #Multi Task TCN
         x2 = x2.permute(0, 2, 1) # [B, seq_len, 1]
 
         # Flatten and keep only valid positions (matching MBA_v1 convention)
-        mask_flat = mask[:, 1:].reshape(-1).bool()
-        x2 = x2.reshape(-1)[mask_flat]
+        # Build mask for seq_len positions (without CLS) based on x_lengths
+        out_mask = create_mask(torch.tensor(x_lengths, device=x.device), seq_len, batch_size, x.device)
+        x2 = x2.reshape(-1)[out_mask.reshape(-1).bool()]
 
         return x1, x2, x3, None, None, None
 

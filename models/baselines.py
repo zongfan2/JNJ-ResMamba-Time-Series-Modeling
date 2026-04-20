@@ -8,8 +8,18 @@ from typing import Optional, Tuple
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import numpy as np
 
-from .resmamba import create_mask
-from .attention import GatedAttentionPoolingMIL
+
+def create_mask(original_lengths, max_length, batch_size, device):
+    """Creates a binary mask: 1 for valid data, 0 for padding."""
+    mask = torch.arange(max_length, device=device).unsqueeze(0).expand(batch_size, -1)
+    mask = (mask < original_lengths.unsqueeze(1)).float()
+    return mask
+
+
+# Late import to avoid circular dependency (components → baselines → attention)
+def _get_GatedAttentionPoolingMIL():
+    from .attention import GatedAttentionPoolingMIL
+    return GatedAttentionPoolingMIL
 
 
 # Baseline and legacy models
@@ -437,7 +447,7 @@ class MTCNA2(nn.Module): #Multi Task TCN
         self.pos_embedding = PositionalEmbedding(max_seq_len, embedding_dim)
         self.embedding = nn.Linear(input_channels, embed_dim)
         self.cls_token = nn.Parameter(torch.randn(1, 1, embed_dim))
-        self.GatedAttentionMILPooling =GatedAttentionPoolingMIL(input_dim=num_filters, hidden_dim=16)
+        self.GatedAttentionMILPooling =_get_GatedAttentionPoolingMIL()(input_dim=num_filters, hidden_dim=16)
         in_size=embed_dim + embedding_dim
         for i in range(num_layers):
             padding = (kernel_size - 1) * dilation // 2  # To maintain same length
@@ -591,7 +601,7 @@ class tcn_learner(nn.Module): #Multi Task TCN
         super(tcn_learner, self).__init__()
         layers = []
         dilation = 1
-        self.GatedAttentionMILPooling =GatedAttentionPoolingMIL(input_dim=num_filters, hidden_dim=16)
+        self.GatedAttentionMILPooling =_get_GatedAttentionPoolingMIL()(input_dim=num_filters, hidden_dim=16)
         in_size=lin_embed_dim #+ embedding_dim
         for i in range(num_layers):
             padding = (kernel_size - 1) * dilation // 2  # To maintain same length
@@ -617,7 +627,7 @@ class mba_learner(nn.Module):
         self.embedding = nn.Linear(input_dim, lin_embed_dim)
         num_filters=lin_embed_dim#+pos_embed_dim
         self.cls_token = nn.Parameter(torch.randn(1, 1, num_filters))
-        self.GatedAttentionMILPooling =GatedAttentionPoolingMIL(input_dim=num_filters, hidden_dim=16)
+        self.GatedAttentionMILPooling =_get_GatedAttentionPoolingMIL()(input_dim=num_filters, hidden_dim=16)
         self.mambablocks1 =BiMambaEncoder(num_filters, n_state,BI)
         self.mambablocks2 =BiMambaEncoder(num_filters, n_state,BI)
         self.mambablocks3 =BiMambaEncoder(num_filters, n_state,BI)
@@ -639,7 +649,7 @@ class hybrid(nn.Module):
         self.embedding = nn.Linear(input_dim, lin_embed_dim)
         num_filters=lin_embed_dim#+pos_embed_dim
         self.cls_token = nn.Parameter(torch.randn(1, 1, num_filters))
-        self.GatedAttentionMILPooling =GatedAttentionPoolingMIL(input_dim=num_filters*2, hidden_dim=16)
+        self.GatedAttentionMILPooling =_get_GatedAttentionPoolingMIL()(input_dim=num_filters*2, hidden_dim=16)
         self.mba_learner =mba_learner(input_dim)
         self.tcn_learner =tcn_learner(input_dim)
         

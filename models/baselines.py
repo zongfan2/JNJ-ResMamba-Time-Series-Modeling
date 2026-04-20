@@ -482,7 +482,7 @@ class MTCNA2(nn.Module): #Multi Task TCN
         x = self.tcn(x)
 
         mask = create_mask(torch.tensor(x_lengths,device=x.device), seq_len+1,batch_size,x.device)
-        masked= self.GatedAttentionMILPooling(x.permute(0, 2, 1), mask)
+        masked, _ = self.GatedAttentionMILPooling(x.permute(0, 2, 1), mask)
         x1 = self.out1(masked)
         x2 = self.out2(x) #use .permute(0, 2, 1) if we want to use conv1d in output
         x3= self.out3(masked)
@@ -668,9 +668,9 @@ class hybrid(nn.Module):
         x_out=torch.cat((x_mba, x_tcn), dim=2)
         
         mask = create_mask(torch.tensor(x_lengths,device=x.device), seq_len+1,batch_size,x.device)
-        masked= self.GatedAttentionMILPooling(x_out, mask)
-        
-        
+        masked, _ = self.GatedAttentionMILPooling(x_out, mask)
+
+
         x1 = self.out1(masked)
         x2 = self.out2(x_out[:, 1:, :]) #use .permute(0, 2, 1) if we want to use conv1d in output
         x3= self.out3(masked)

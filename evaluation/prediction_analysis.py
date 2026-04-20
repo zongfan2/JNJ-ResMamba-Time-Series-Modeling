@@ -200,10 +200,20 @@ def build_variant_results(variant_label, model_name, folder_path, df_rest):
         print(f"  [paper] {variant_label!r}: no usable folds")
         return None, None
 
+    # --- Per-fold mean ± std (shows variability across folds) ---
     summary = {'variant': variant_label, 'n_folds': len(per_fold)}
     for col in PAPER_METRIC_COLS:
         summary[f'{col}_mean'] = per_fold[col].mean()
         summary[f'{col}_std'] = per_fold[col].std(ddof=1) if len(per_fold) > 1 else 0.0
+
+    # --- Overall / pooled metrics (all folds concatenated, single score) ---
+    dfp_valid = dfp[dfp['subject'].notna()]
+    seg_all = dfp_valid.groupby('segment').max(numeric_only=True)
+    if len(seg_all) >= 2 and seg_all.gt1.nunique() >= 2:
+        pooled = compute_paper_metrics(seg_all)
+        for col in PAPER_METRIC_COLS:
+            summary[f'{col}_pooled'] = pooled[col]
+
     return summary, per_fold
 
 
@@ -298,6 +308,10 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
             continue
         summary_rows.append(summary)
         per_fold_dict[label] = per_fold
+        # Show per-fold mean vs pooled for quick comparison
+        f1_mean = summary.get('F1_mean', 0)
+        f1_pooled = summary.get('F1_pooled', 0)
+        print(f"  F1: mean-of-folds={f1_mean:.2f}%  pooled={f1_pooled:.2f}%")
 
     if not summary_rows:
         print("[paper] no variants produced metrics — nothing to write.")

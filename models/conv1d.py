@@ -177,9 +177,12 @@ class Conv1DTS(nn.Module):
             mask_output = self.mask_prediction(x).squeeze(1)
 
             # Flatten and keep only valid positions
+            # mask_output is [B, mask_length] where mask_length may differ
+            # from seq_len (e.g. AdaptiveAvgPool target); use its own length.
             if x_lengths is not None:
-                mask = torch.arange(seq_len, device=x.device).unsqueeze(0) < torch.tensor(
-                    x_lengths, device=x.device, dtype=torch.long
+                mask_len = mask_output.shape[1]
+                mask = torch.arange(mask_len, device=mask_output.device).unsqueeze(0) < torch.tensor(
+                    x_lengths, device=mask_output.device, dtype=torch.long
                 ).unsqueeze(1)
                 mask_output = mask_output.view(-1)[mask.view(-1)]
         else:

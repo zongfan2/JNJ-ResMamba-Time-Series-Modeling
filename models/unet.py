@@ -8,6 +8,9 @@ from typing import Optional, Tuple
 import numpy as np
 from torchvision import models
 
+from .components import FeatureExtractorConv2d
+from .specialized import PredictHead, create_mask
+
 
 # U-Net and decoder-based models
 
@@ -34,6 +37,7 @@ class EfficientUNet(nn.Module):
         # self.featurelayer = featurelayer
         # if use out3 layer to predict scratch duration
         self.reg_head = reg_head
+        self._max_seq_len = prediction_length
         self.feature_extractor = FeatureExtractorConv2d(input_dim, prediction_length, target_shape, **tcn_params)
         # if self.featurelayer == "Conv2d":
         #     self.feature_extractor = FeatureExtractorConv2d(input_dim, prediction_length, target_shape, **tcn_params)
@@ -87,13 +91,13 @@ class EfficientUNet(nn.Module):
                                 average_mask=average_mask,
                                 average_window_size=average_window_size)
 
-    def forward(self, x, x_lengths=None, max_seq_len=None):
+    def forward(self, x, x_lengths=None, labels1=None, labels3=None,
+                apply_mixup=False, mixup_alpha=0.2, max_seq_len=None, **kwargs):
         x = self.feature_extractor(x.permute(0, 2, 1), x_lengths) # [batch size, num_filters, pred_len]
-        # if self.featurelayer != "Conv2d":
-        #     # expand dims at 1
-        #     x = torch.unsqueeze(x, 1) 
-        #     # Expand the channel dimension to size 3
-        #     x = x.expand(-1, 3, -1, -1) 
+
+        # out2 has fixed prediction_length == self._max_seq_len, so always
+        # use that for the mask (ignore batch-local pad-length passed in).
+        max_seq_len = self._max_seq_len
 
         # Encoder Stage
         features = []  # Container for saving encoder outputs
@@ -113,18 +117,14 @@ class EfficientUNet(nn.Module):
 
         # conv
         x = self.conv(x)
-        # TODO: add bn and relu
         x = self.bn3(x)
         x = torch.relu(x)
         # pool
         x = self.pool(x)
         x = x.squeeze()
 
-        # multi-task output
-        attn = torch.zeros(x.shape[0], 1).to(x.device)
-
         out1, out2, out3 = self.head(x, x_lengths, max_seq_len)
-        return out1, out2, out3, attn
+        return out1, out2, out3, None, None, None
 
 class EncoderStage(nn.Module):
     def __init__(self, in_channels, out_channels, num_blocks, downsample):

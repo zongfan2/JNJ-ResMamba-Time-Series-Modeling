@@ -93,6 +93,13 @@ class EfficientUNet(nn.Module):
 
     def forward(self, x, x_lengths=None, labels1=None, labels3=None,
                 apply_mixup=False, mixup_alpha=0.2, max_seq_len=None, **kwargs):
+        # FeatureExtractorConv2d hardcodes reshape to 33x37=1221, so input
+        # must match self._max_seq_len. Right-pad batch-local shorter inputs.
+        if x.dim() == 3 and x.shape[1] < self._max_seq_len:
+            pad_len = self._max_seq_len - x.shape[1]
+            x = F.pad(x, (0, 0, 0, pad_len))
+        elif x.dim() == 3 and x.shape[1] > self._max_seq_len:
+            x = x[:, : self._max_seq_len, :]
         x = self.feature_extractor(x.permute(0, 2, 1), x_lengths) # [batch size, num_filters, pred_len]
 
         # out2 has fixed prediction_length == self._max_seq_len, so always

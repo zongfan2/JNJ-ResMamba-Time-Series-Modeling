@@ -160,10 +160,11 @@ class PatchTSTNS(nn.Module):
         max_seq_len = self._max_seq_len
         x = self.model(x)
         head_out = self.head(x["last_hidden_state"], x_lengths, max_seq_len)
-        # PatchTSTHead returns (out1, out2, out3, attn) — extend to 6 values
+        # PatchTSTHead returns (out1, out2, out3, attn) — extend to 6 values.
+        # Return attn=None (not a 3D placeholder) so train_scratch.py skips it.
         if len(head_out) == 4:
-            out1, out2, out3, attn = head_out
-            return out1, out2, out3, attn, None, None
+            out1, out2, out3, _ = head_out
+            return out1, out2, out3, None, None, None
         return head_out
 
 

@@ -14,6 +14,13 @@ try:
 except ImportError:
     ViT1D = None
 
+
+def create_mask(original_lengths, max_length, batch_size, device):
+    mask = torch.arange(max_length, device=device).unsqueeze(0).expand(batch_size, -1)
+    mask = (mask < original_lengths.unsqueeze(1)).float()
+    return mask
+
+
 # Specialized architectures: PatchTST, ViT, Swin, etc.
 
 class PatchEmbedding(nn.Module):

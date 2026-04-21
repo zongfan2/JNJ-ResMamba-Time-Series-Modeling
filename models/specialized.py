@@ -141,9 +141,16 @@ class PatchTSTNS(nn.Module):
 
     def forward(self, x, x_lengths=None, labels1=None, labels3=None,
                 apply_mixup=False, mixup_alpha=0.2, max_seq_len=None):
-        # Derive max_seq_len from input shape if not provided
-        if max_seq_len is None:
-            max_seq_len = x.shape[1] if x.dim() == 3 else self._max_seq_len
+        # HuggingFace PatchTST requires input length == config.context_length.
+        # Right-pad with zeros if the (batch-local) padded length is shorter.
+        if x.dim() == 3 and x.shape[1] < self._max_seq_len:
+            pad_len = self._max_seq_len - x.shape[1]
+            x = F.pad(x, (0, 0, 0, pad_len))
+        elif x.dim() == 3 and x.shape[1] > self._max_seq_len:
+            x = x[:, : self._max_seq_len, :]
+        # out2 has fixed prediction_length == context_length == self._max_seq_len,
+        # so always use that as the mask size.
+        max_seq_len = self._max_seq_len
         x = self.model(x)
         head_out = self.head(x["last_hidden_state"], x_lengths, max_seq_len)
         # PatchTSTHead returns (out1, out2, out3, attn) — extend to 6 values

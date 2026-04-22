@@ -518,23 +518,36 @@ class ViT1D(nn.Module):
         assert x.dim() == 3, "Input must be of shape [B, L, C]"
 
         # PatchEmbedWithPos1D expects fixed time_length; pad batch-local inputs
-        # with padding_value (NOT zeros) so PatchEmbed detects the tail as
-        # padding and the attention mask ignores it. Zero-padding would leave
-        # those positions marked as valid, poisoning the CLS token.
+        # with 0 (matches the value add_padding uses in data/padding.py).
         if x.shape[1] < self.time_length:
             pad_len = self.time_length - x.shape[1]
-            x = F.pad(x, (0, 0, 0, pad_len), value=self.padding_value)
+            x = F.pad(x, (0, 0, 0, pad_len), value=0.0)
         elif x.shape[1] > self.time_length:
             x = x[:, : self.time_length, :]
 
         x = x.permute(0, 2, 1)  # [B, C, L]
 
-        x, attention_mask = self.embedding(x)  # [B, 1+num_patches, embed_dim]
+        x, _ = self.embedding(x)  # [B, 1+num_patches, embed_dim]
 
-        # MultiheadAttention's key_padding_mask expects bool; float masks
-        # trigger a perf-warning conversion on every call.
-        if attention_mask is not None and attention_mask.dtype != torch.bool:
-            attention_mask = attention_mask.bool()
+        # Build the attention mask FROM x_lengths (not from content inspection).
+        # Data is zero-padded by add_padding, but ViT1D's PatchEmbed scans for
+        # padding_value=-999 which never matches — so its internal mask is all
+        # False and self-attention would attend to the zero-padded tail.
+        attention_mask = None
+        if x_lengths is not None:
+            num_time_patches = (self.time_length - self.patch_size) // self.stride + 1
+            B = x.shape[0]
+            patch_ends = torch.arange(
+                num_time_patches, device=x.device
+            ) * self.stride + self.patch_size  # end index of each patch (exclusive)
+            lens = torch.tensor(x_lengths, device=x.device, dtype=torch.long)
+            # A patch is valid iff its end falls within the true sequence length.
+            patch_valid = patch_ends.unsqueeze(0) <= lens.unsqueeze(1)  # [B, P]
+            # key_padding_mask: True = IGNORE.
+            patch_pad = ~patch_valid  # True where padded
+            # Prepend False for CLS token (always attended to).
+            cls_col = torch.zeros(B, 1, dtype=torch.bool, device=x.device)
+            attention_mask = torch.cat([cls_col, patch_pad], dim=1)
 
         # Apply encoder layers
         x, _ = self.forward_embedding(x, attention_mask)

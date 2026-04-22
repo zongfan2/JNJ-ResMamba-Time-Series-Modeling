@@ -343,6 +343,7 @@ class ViT1D(nn.Module):
         self.in_channels = in_channels
         self.stride = stride
         self.use_embedding = use_embedding
+        self.padding_value = padding_value
         self.num_time_patches = (time_length - patch_size) // stride + 1
         self.num_patches = self.num_time_patches * in_channels
         self.load_weights = load_weights
@@ -516,10 +517,13 @@ class ViT1D(nn.Module):
         # forward using input x
         assert x.dim() == 3, "Input must be of shape [B, L, C]"
 
-        # PatchEmbedWithPos1D expects fixed time_length; pad batch-local inputs.
+        # PatchEmbedWithPos1D expects fixed time_length; pad batch-local inputs
+        # with padding_value (NOT zeros) so PatchEmbed detects the tail as
+        # padding and the attention mask ignores it. Zero-padding would leave
+        # those positions marked as valid, poisoning the CLS token.
         if x.shape[1] < self.time_length:
             pad_len = self.time_length - x.shape[1]
-            x = F.pad(x, (0, 0, 0, pad_len))
+            x = F.pad(x, (0, 0, 0, pad_len), value=self.padding_value)
         elif x.shape[1] > self.time_length:
             x = x[:, : self.time_length, :]
 

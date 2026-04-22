@@ -515,6 +515,14 @@ class ViT1D(nn.Module):
                 apply_mixup=False, mixup_alpha=0.2):
         # forward using input x
         assert x.dim() == 3, "Input must be of shape [B, L, C]"
+
+        # PatchEmbedWithPos1D expects fixed time_length; pad batch-local inputs.
+        if x.shape[1] < self.time_length:
+            pad_len = self.time_length - x.shape[1]
+            x = F.pad(x, (0, 0, 0, pad_len))
+        elif x.shape[1] > self.time_length:
+            x = x[:, : self.time_length, :]
+
         x = x.permute(0, 2, 1)  # [B, C, L]
 
         x, attention_mask = self.embedding(x)  # [B, 1+num_patches, embed_dim]
@@ -526,6 +534,16 @@ class ViT1D(nn.Module):
         output1, output2, output3, con_embed, mixup_info = self.predictor(
             x, labels=labels1, apply_mixup=apply_mixup, mixup_alpha=mixup_alpha
         )
+
+        # Mask-aware flatten of out2: loss expects concat of true-length values,
+        # but out2 is fixed [B, mask_length]. Keep only positions j < x_lengths[i].
+        if x_lengths is not None and output2 is not None and output2.dim() == 2:
+            mask_len = output2.shape[1]
+            valid = torch.arange(mask_len, device=output2.device).unsqueeze(0) < torch.tensor(
+                x_lengths, device=output2.device, dtype=torch.long
+            ).unsqueeze(1)
+            output2 = output2.reshape(-1)[valid.reshape(-1)]
+
         attn = None
         return output1, output2, output3, attn, con_embed, mixup_info
         

@@ -33,9 +33,8 @@ if _PROJECT_ROOT not in sys.path:
 
 from models.resmamba import MBA_v1
 from models.setup import setup_model
-from data.loading import load_sequence_data
+from data.loading import load_data
 from data.padding import add_padding
-from data.batching import batch_generator
 
 
 def parse_args():
@@ -173,32 +172,39 @@ def load_checkpoint(model, checkpoint_path, device):
     return model
 
 
-def run_inference(model, df, scaler, device, n_samples, seg_column="segment"):
-    """Run model inference on the first n_samples segments and collect results."""
+def run_inference(model, df, device, n_samples, seg_column="segment"):
+    """Run model inference on the first n_samples segments and collect results.
+
+    Iterates over segments directly (not via batch_generator) because
+    batch_generator skips batches with fewer than 2 segments, which would
+    prevent single-segment inference.  We group pairs of segments into
+    mini-batches of 2 to satisfy BatchNorm constraints, then unpack per
+    segment.
+    """
     model.eval()
 
-    segments_seen = 0
+    all_segments = df[seg_column].unique()
+    n_to_process = min(n_samples, len(all_segments))
+    segments_to_run = all_segments[:n_to_process]
     results = []
 
     with torch.no_grad():
-        for batch in batch_generator(df=df, batch_size=1, stratify=False,
-                                     shuffle=False, seg_column=seg_column):
-            if segments_seen >= n_samples:
-                break
+        # Process in pairs (BatchNorm1d needs batch_size >= 2 in eval mode
+        # for safety, though eval() uses running stats).  Pairs also
+        # make add_padding work correctly.
+        for i in range(0, len(segments_to_run), 2):
+            seg_batch = segments_to_run[i:i + 2]
+            batch = df[df[seg_column].isin(seg_batch)]
 
-            seg_name = batch[seg_column].iloc[0]
+            # If only one segment left, duplicate it so add_padding works
+            single_seg = len(seg_batch) == 1
+            if single_seg:
+                batch = pd.concat([batch, batch], ignore_index=True)
+                # Give the duplicate a distinct segment name so groupby works
+                dup_mask = batch.index >= len(batch) // 2
+                batch.loc[dup_mask, seg_column] = batch.loc[dup_mask, seg_column] + "__dup"
 
-            # Extract raw signals before standardization for visualization
-            raw_x = batch["x"].values.copy()
-            raw_y = batch["y"].values.copy()
-            raw_z = batch["z"].values.copy()
-
-            # Ground truth labels
-            gt_scratch = batch["scratch"].values.copy() if "scratch" in batch.columns else np.zeros(len(batch))
-            gt_segment_scratch = batch["segment_scratch"].values[0] if "segment_scratch" in batch.columns else 0
-            gt_scratch_duration = batch.get("scratch_duration", pd.Series([0])).values[0] if "scratch_duration" in batch.columns else 0
-
-            # Prepare batch for model (adds padding, standardizes)
+            # Prepare batch for model (pads to max length in batch)
             batch_data, label1, label2, label3, x_lens = add_padding(
                 batch, device, seg_column
             )
@@ -208,49 +214,72 @@ def run_inference(model, df, scaler, device, n_samples, seg_column="segment"):
                 batch_data, x_lens
             )
 
-            # Post-process predictions
-            pr1_prob = torch.sigmoid(outputs1).cpu().numpy().flatten()
-            pr1 = (pr1_prob >= 0.5).astype(float)
+            # Post-process each segment in the batch
+            pr1_prob_all = torch.sigmoid(outputs1).cpu().numpy().flatten()
+            pr3_all = outputs3.cpu().numpy().flatten()
             pr2_prob_raw = torch.sigmoid(outputs2).cpu().numpy().flatten()
-            pr3 = outputs3.cpu().numpy().flatten()
 
-            # Get the actual sequence length (before padding)
-            seq_len = int(x_lens[0])
+            # pr2 is masked by MBA_v1 — it concatenates valid positions
+            # from all segments in the batch.  Split by x_lens.
+            offset = 0
+            n_in_batch = 1 if single_seg else len(seg_batch)
+            for j in range(n_in_batch):
+                seg_name = seg_batch[j]
+                seg_rows = df[df[seg_column] == seg_name]
+                seq_len = int(x_lens[j])
 
-            # pr2 is already masked to valid positions by MBA_v1.forward(),
-            # so pr2_prob_raw has exactly seq_len elements
-            pr2_prob = pr2_prob_raw[:seq_len]
-            pr2 = (pr2_prob >= 0.5).astype(float)
+                # Raw signals for visualization
+                raw_x = seg_rows["x"].values[:seq_len].copy()
+                raw_y = seg_rows["y"].values[:seq_len].copy()
+                raw_z = seg_rows["z"].values[:seq_len].copy()
 
-            # Trim raw signals and ground truth to actual length
-            raw_x = raw_x[:seq_len]
-            raw_y = raw_y[:seq_len]
-            raw_z = raw_z[:seq_len]
-            gt_scratch = gt_scratch[:seq_len]
+                # Ground truth
+                gt_scratch = seg_rows["scratch"].values[:seq_len].copy() if "scratch" in seg_rows.columns else np.zeros(seq_len)
+                gt_segment_scratch = seg_rows["segment_scratch"].values[0] if "segment_scratch" in seg_rows.columns else 0
+                gt_scratch_duration = seg_rows["scratch_duration"].values[0] if "scratch_duration" in seg_rows.columns else 0
 
-            # Build per-timestep DataFrame for this segment
-            sample_df = pd.DataFrame({
-                "segment": seg_name,
-                "timestep": np.arange(seq_len),
-                "x": raw_x,
-                "y": raw_y,
-                "z": raw_z,
-                "gt_scratch": gt_scratch,
-                "gt_segment_scratch": gt_segment_scratch,
-                "gt_scratch_duration": gt_scratch_duration,
-                "pr1": pr1[0],
-                "pr1_prob": pr1_prob[0],
-                "pr2": pr2,
-                "pr2_prob": pr2_prob,
-                "pr3": pr3[0],
-            })
-            results.append(sample_df)
-            segments_seen += 1
+                # Predictions for this segment
+                pr1_prob = float(pr1_prob_all[j])
+                pr1 = float(pr1_prob >= 0.5)
+                pr3 = float(pr3_all[j])
 
-            if segments_seen % 10 == 0:
-                print(f"  Processed {segments_seen}/{n_samples} segments")
+                # Per-timestep mask predictions (pr2 is flat-concatenated
+                # across valid positions of all segments in the batch)
+                pr2_prob = pr2_prob_raw[offset:offset + seq_len]
+                pr2 = (pr2_prob >= 0.5).astype(float)
+                offset += seq_len
 
-    print(f"Inference complete: {segments_seen} segments processed")
+                sample_df = pd.DataFrame({
+                    "segment": seg_name,
+                    "timestep": np.arange(seq_len),
+                    "x": raw_x,
+                    "y": raw_y,
+                    "z": raw_z,
+                    "gt_scratch": gt_scratch,
+                    "gt_segment_scratch": gt_segment_scratch,
+                    "gt_scratch_duration": gt_scratch_duration,
+                    "pr1": pr1,
+                    "pr1_prob": pr1_prob,
+                    "pr2": pr2,
+                    "pr2_prob": pr2_prob,
+                    "pr3": pr3,
+                })
+                results.append(sample_df)
+
+            # Skip the duplicate's pr2 offset if we padded a single segment
+            if single_seg:
+                offset += int(x_lens[1])
+
+            processed = min(i + 2, n_to_process)
+            if processed % 10 == 0 or processed == n_to_process:
+                print(f"  Processed {processed}/{n_to_process} segments")
+
+    print(f"Inference complete: {len(results)} segments processed")
+    if not results:
+        raise RuntimeError(
+            f"No segments were processed. DataFrame has {len(df)} rows and "
+            f"{df[seg_column].nunique()} unique segments. Check data loading."
+        )
     return pd.concat(results, ignore_index=True)
 
 
@@ -267,31 +296,22 @@ def main():
 
     # Paths from config or CLI overrides
     data_folder = args.data_folder or cfg.get("data", {}).get("input_folder")
-    scaler_path = args.scaler_path or cfg.get("data", {}).get("scaler_path")
 
     if not data_folder:
         raise ValueError("Data folder must be specified via --data_folder or in config YAML")
 
-    # Load scaler
-    scaler = None
-    if scaler_path and os.path.exists(scaler_path):
-        scaler = joblib.load(scaler_path)
-        print(f"Loaded scaler from {scaler_path}")
-
-    # Load data
+    # Load data using load_data() which adds required columns:
+    # segment_scratch, scratch_duration, position_segment, etc.
     print(f"Loading data from {data_folder} ...")
-    list_features = ["x", "y", "z"]
-    df = load_sequence_data(
-        path=data_folder,
-        remove_subject_filter=None,
-        include_subject_filter=None,
-        list_features=list_features,
-        motion_filter=True,
-    )
+    df = load_data(data_folder, motion_filter=True)
     print(f"Loaded {len(df)} rows, {df['segment'].nunique()} segments")
 
     # Standardize using the saved scaler
-    if scaler is not None:
+    scaler_path_resolved = args.scaler_path or cfg.get("data", {}).get("scaler_path")
+    if scaler_path_resolved and os.path.exists(scaler_path_resolved):
+        scaler = joblib.load(scaler_path_resolved)
+        print(f"Loaded scaler from {scaler_path_resolved}")
+        list_features = ["x", "y", "z"]
         df[list_features] = scaler.transform(df[list_features])
 
     # Build and load model
@@ -302,7 +322,7 @@ def main():
     # Run inference
     print(f"Running inference on first {args.n_samples} segments ...")
     results_df = run_inference(
-        model, df, scaler, device, n_samples=args.n_samples
+        model, df, device, n_samples=args.n_samples
     )
 
     # Save outputs

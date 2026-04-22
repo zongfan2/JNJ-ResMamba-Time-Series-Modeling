@@ -80,7 +80,7 @@ def load_config(config_path):
     return cfg
 
 
-def build_model(cfg, device):
+def build_model(cfg, device, checkpoint_path):
     """Instantiate MBA_v1 from the hardcoded param set used in training."""
     # Match the param set from train_scratch.py (param_mba_v1)
     best_params = {
@@ -114,11 +114,38 @@ def build_model(cfg, device):
         best_params.update(overrides)
 
     input_dim = 3  # accelerometer x, y, z
-    max_seq_len = 1220  # default for 3s segments at 20Hz with margin
+
+    # Infer max_seq_len from checkpoint's positional encoding shape so the
+    # model architecture matches the saved weights exactly.
+    max_seq_len = _infer_max_seq_len(checkpoint_path, device, fallback=1221)
+    print(f"Using max_seq_len={max_seq_len} (from checkpoint PE shape)")
+
     model = setup_model("mbav1", input_dim, max_seq_len, best_params,
                         pretraining=False)
     model = model.to(device)
     return model, best_params
+
+
+def _infer_max_seq_len(checkpoint_path, device, fallback=1221):
+    """Read positional_encoding.pe shape from checkpoint to get max_seq_len."""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    elif isinstance(checkpoint, dict):
+        for key in ["state_dict", "model"]:
+            if key in checkpoint:
+                state_dict = checkpoint[key]
+                break
+        else:
+            state_dict = checkpoint
+    else:
+        state_dict = checkpoint
+
+    # Look for positional_encoding.pe — shape is [1, num_filters, max_seq_len]
+    for k, v in state_dict.items():
+        if "positional_encoding.pe" in k:
+            return v.shape[-1]
+    return fallback
 
 
 def load_checkpoint(model, checkpoint_path, device):
@@ -127,7 +154,6 @@ def load_checkpoint(model, checkpoint_path, device):
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     elif isinstance(checkpoint, dict):
-        # Try common key names
         for key in ["state_dict", "model"]:
             if key in checkpoint:
                 state_dict = checkpoint[key]
@@ -270,7 +296,7 @@ def main():
 
     # Build and load model
     print("Building model ...")
-    model, best_params = build_model(cfg, device)
+    model, best_params = build_model(cfg, device, args.checkpoint)
     model = load_checkpoint(model, args.checkpoint, device)
 
     # Run inference

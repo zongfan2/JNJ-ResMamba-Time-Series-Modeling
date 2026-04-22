@@ -527,6 +527,11 @@ class ViT1D(nn.Module):
 
         x, attention_mask = self.embedding(x)  # [B, 1+num_patches, embed_dim]
 
+        # MultiheadAttention's key_padding_mask expects bool; float masks
+        # trigger a perf-warning conversion on every call.
+        if attention_mask is not None and attention_mask.dtype != torch.bool:
+            attention_mask = attention_mask.bool()
+
         # Apply encoder layers
         x, _ = self.forward_embedding(x, attention_mask)
 

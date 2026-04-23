@@ -23,9 +23,26 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Pip-preamble (mirrors training/train_scratch.py).  Ensures the classical
+# baselines' deps (xgboost, lightgbm) are present on Domino where the base
+# env doesn't include them.  Quiet — failures fall through to a sklearn
+# HistGradientBoosting fallback in build_classifier / build_regressor.
+# ---------------------------------------------------------------------------
+_shell_script = '''
+cd munge/predictive_modeling 2>/dev/null || true
+sudo python3.11 -m pip install --quiet xgboost lightgbm 2>/dev/null || \
+python3.11 -m pip install --quiet xgboost lightgbm 2>/dev/null || true
+'''
+try:
+    subprocess.run(_shell_script, shell=True, capture_output=True, text=True, timeout=180)
+except Exception:
+    pass
 
 import joblib
 import numpy as np
@@ -103,6 +120,11 @@ def build_classifier(arch: str, overrides: dict):
     elif arch == "ji2023":
         lgb = _try_import_lightgbm()
         if lgb is not None:
+            # YAML `scale_pos_weight: null` means "auto" — set at fit time in
+            # run_cv from the train-fold neg/pos ratio.  Use 1.0 as the init
+            # placeholder; run_cv overwrites before fit.
+            spw_override = overrides.get("scale_pos_weight")
+            spw_init = float(spw_override) if spw_override is not None else 1.0
             return lgb.LGBMClassifier(
                 n_estimators=int(overrides.get("n_estimators", 500)),
                 learning_rate=float(overrides.get("learning_rate", 0.05)),
@@ -110,7 +132,7 @@ def build_classifier(arch: str, overrides: dict):
                 max_depth=int(overrides.get("max_depth", -1)),
                 min_child_samples=int(overrides.get("min_child_samples", 20)),
                 reg_lambda=float(overrides.get("reg_lambda", 0.0)),
-                scale_pos_weight=float(overrides.get("scale_pos_weight", 1.0)),
+                scale_pos_weight=spw_init,
                 random_state=int(overrides.get("random_state", 42)),
                 n_jobs=int(overrides.get("n_jobs", -1)),
                 verbose=-1,

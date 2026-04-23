@@ -188,6 +188,13 @@ def train_dl_model(
 
     model.to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
+    # Cosine anneal from `lr` down to lr/100 over the epoch cap.  Cheap to
+    # add, squeezes a bit more off val loss late in training.  Early-stop
+    # still governs actual run length — if training stops early, we simply
+    # exit the LR curve partway through.
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        opt, T_max=max(1, epochs), eta_min=lr / 100.0,
+    )
 
     best_val = float("inf")
     best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
@@ -203,6 +210,7 @@ def train_dl_model(
             loss = criterion(logits, yb)
             loss.backward()
             opt.step()
+        scheduler.step()
 
         model.eval()
         with torch.no_grad():
@@ -215,7 +223,8 @@ def train_dl_model(
                 val_count += xb.shape[0]
             val_loss = val_sum / max(1, val_count)
         if verbose:
-            print(f"    dl epoch={epoch:02d}  val_loss={val_loss:.4f}")
+            cur_lr = opt.param_groups[0]["lr"]
+            print(f"    dl epoch={epoch:02d}  val_loss={val_loss:.4f}  lr={cur_lr:.2e}")
         if val_loss < best_val - 1e-5:
             best_val = val_loss
             best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}

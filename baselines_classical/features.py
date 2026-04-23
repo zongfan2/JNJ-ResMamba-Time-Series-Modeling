@@ -209,6 +209,44 @@ def extract_features(xyz: np.ndarray, fs: int = 20, hpf: bool = True) -> np.ndar
     return np.asarray(feats, dtype=np.float32)
 
 
+def extract_raw_segments_batch(
+    df: pd.DataFrame,
+    seg_col: str = "segment",
+    xyz_cols=("x", "y", "z"),
+    max_len: int = 1200,
+    hpf: bool = True,
+    fs: int = 20,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return raw (HPF-filtered) segment tensors padded/truncated to ``max_len``.
+
+    Segment order matches :func:`extract_features_batch`, so the handcrafted
+    features and any DL-derived features can be concatenated without a realign.
+
+    Returns:
+        raw:      [N_segments, max_len, 3] float32 array.
+        seg_ids:  [N_segments] str identifier.
+    """
+    raw_list, seg_list = [], []
+    for seg_id, seq in df.groupby(seg_col, sort=False, observed=True):
+        xyz = seq.loc[:, list(xyz_cols)].to_numpy(dtype=np.float32)
+        if xyz.shape[0] < 4:
+            continue
+        if hpf:
+            xyz = highpass_filter(xyz, fs=fs).astype(np.float32)
+        L = xyz.shape[0]
+        if L < max_len:
+            xyz = np.concatenate(
+                [xyz, np.zeros((max_len - L, xyz.shape[1]), dtype=np.float32)], axis=0
+            )
+        elif L > max_len:
+            xyz = xyz[:max_len]
+        raw_list.append(xyz)
+        seg_list.append(str(seg_id))
+    if not raw_list:
+        return np.zeros((0, max_len, 3), dtype=np.float32), np.array([], dtype=object)
+    return np.stack(raw_list, axis=0), np.asarray(seg_list, dtype=object)
+
+
 def extract_features_batch(
     df: pd.DataFrame,
     seg_col: str = "segment",

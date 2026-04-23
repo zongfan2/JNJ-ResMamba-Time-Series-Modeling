@@ -33,14 +33,14 @@ model:
     supcon_loss: false
 
 training:
-  output: baseline-vit1d-bs32-fold4
+  output: baseline-vit1d-bs32-loso
   execution_mode: train
   epochs: 200
   batch_size: 32
   num_gpu: 0
   clear_tracker: true
   data_augmentation: 0
-  testing: LOFO
+  testing: LOSO
 
 transfer_learning:
   freeze_encoder: false

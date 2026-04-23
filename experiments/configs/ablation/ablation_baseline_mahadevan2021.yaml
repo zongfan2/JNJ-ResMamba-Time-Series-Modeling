@@ -1,13 +1,14 @@
 # =============================================================================
-# Baseline comparison — Mahadevan et al. 2021 (npj Digital Medicine)
+# Baseline comparison — Mahadevan et al. 2021 (npj Digital Medicine), XGBoost variant
 # =============================================================================
-# Random Forest (50 trees) on 26 RFECV-selected features drawn from 36 time-
-# and frequency-domain statistics computed on SVM/PC1/PC2 of the 0.25 Hz
-# high-pass-filtered 3-axis accelerometer signal.  Reference:
+# Paper 1's feature engineering (36 time/frequency features on SVM/PC1/PC2 of
+# the 0.25 Hz high-pass-filtered accelerometer) + 26 RFECV-selected features
+# feeding an XGBoost classifier (replacing the paper's RandomForest per our
+# experimental setup) and an XGBoost regressor for per-segment scratch
+# duration.  Reference:
 #   https://www.nature.com/articles/s41746-021-00402-x
 #
-# This is a classical ML baseline; it runs via training/train_classical.py
-# rather than training/train_scratch.py.
+# Runs via training/train_classical.py.  LOSO cross-validation.
 #
 # Usage:
 #   python3.11 training/train_classical.py \
@@ -15,9 +16,9 @@
 
 experiment:
   name: baseline_mahadevan2021
-  description: "Paper 1 baseline — RandomForest + 36 hand-crafted features."
+  description: "Paper 1 baseline — XGBoost + 36 hand-crafted features (classification + duration regression)."
   task: scratch_detection
-  date: "2026-04-22"
+  date: "2026-04-23"
 
 data:
   input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
@@ -27,14 +28,21 @@ data:
 model:
   architecture: mahadevan2021
   overrides:
-    n_estimators: 50
+    # XGBoost classifier
+    n_estimators: 300
+    learning_rate: 0.05
+    max_depth: 6
+    subsample: 0.9
+    colsample_bytree: 0.9
+    reg_lambda: 1.0
+    # feature selection
     num_features: 26
     random_state: 42
 
 training:
-  output: baseline-mahadevan2021-fold4
+  output: baseline-mahadevan2021-loso
   execution_mode: train
-  testing: LOFO
+  testing: LOSO
   num_gpu: 0
 
 reproducibility:

@@ -42,6 +42,7 @@ from utils.common import create_folder  # noqa: E402
 
 from baselines_classical.features import (  # noqa: E402
     extract_features_batch,
+    extract_raw_segments_batch,
     feature_names,
 )
 
@@ -72,35 +73,158 @@ def load_config(path: str) -> dict:
 def build_classifier(arch: str, overrides: dict):
     """Return a fitted-on-demand sklearn-compatible classifier."""
     if arch == "mahadevan2021":
-        from sklearn.ensemble import RandomForestClassifier
-        n_trees = int(overrides.get("n_estimators", 50))
-        return RandomForestClassifier(
-            n_estimators=n_trees,
-            random_state=overrides.get("random_state", 42),
-            n_jobs=overrides.get("n_jobs", -1),
-            class_weight=overrides.get("class_weight", None),
+        # XGBoost (per user request, replacing paper 1's RandomForest).
+        xgb = _try_import_xgboost()
+        if xgb is not None:
+            return xgb.XGBClassifier(
+                n_estimators=int(overrides.get("n_estimators", 300)),
+                learning_rate=float(overrides.get("learning_rate", 0.05)),
+                max_depth=int(overrides.get("max_depth", 6)),
+                min_child_weight=float(overrides.get("min_child_weight", 1.0)),
+                reg_lambda=float(overrides.get("reg_lambda", 1.0)),
+                subsample=float(overrides.get("subsample", 0.9)),
+                colsample_bytree=float(overrides.get("colsample_bytree", 0.9)),
+                random_state=int(overrides.get("random_state", 42)),
+                n_jobs=int(overrides.get("n_jobs", -1)),
+                eval_metric="logloss",
+                tree_method="hist",
+            )
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        print("[classical] xgboost unavailable — falling back to "
+              "sklearn.HistGradientBoostingClassifier.")
+        return HistGradientBoostingClassifier(
+            max_iter=int(overrides.get("n_estimators", 300)),
+            learning_rate=float(overrides.get("learning_rate", 0.05)),
+            max_depth=None if int(overrides.get("max_depth", -1)) < 0 else int(overrides["max_depth"]),
+            min_samples_leaf=int(overrides.get("min_child_samples", 20)),
+            l2_regularization=float(overrides.get("reg_lambda", 1.0)),
+            random_state=int(overrides.get("random_state", 42)),
         )
     elif arch == "ji2023":
-        try:
-            import lightgbm as lgb
-        except ImportError as exc:
-            raise ImportError(
-                "Paper 2 baseline requires lightgbm. Install via `pip install lightgbm`."
-            ) from exc
-        return lgb.LGBMClassifier(
-            n_estimators=int(overrides.get("n_estimators", 500)),
+        lgb = _try_import_lightgbm()
+        if lgb is not None:
+            return lgb.LGBMClassifier(
+                n_estimators=int(overrides.get("n_estimators", 500)),
+                learning_rate=float(overrides.get("learning_rate", 0.05)),
+                num_leaves=int(overrides.get("num_leaves", 31)),
+                max_depth=int(overrides.get("max_depth", -1)),
+                min_child_samples=int(overrides.get("min_child_samples", 20)),
+                reg_lambda=float(overrides.get("reg_lambda", 0.0)),
+                scale_pos_weight=float(overrides.get("scale_pos_weight", 1.0)),
+                random_state=int(overrides.get("random_state", 42)),
+                n_jobs=int(overrides.get("n_jobs", -1)),
+                verbose=-1,
+            )
+        # Fallback: sklearn's histogram-GBDT — closest always-available analog
+        # to LightGBM.  Class imbalance is handled via sample_weight at fit time
+        # (see run_lofo); HistGradientBoosting doesn't expose scale_pos_weight.
+        from sklearn.ensemble import HistGradientBoostingClassifier
+        print("[classical] lightgbm unavailable — falling back to "
+              "sklearn.HistGradientBoostingClassifier.")
+        return HistGradientBoostingClassifier(
+            max_iter=int(overrides.get("n_estimators", 500)),
             learning_rate=float(overrides.get("learning_rate", 0.05)),
-            num_leaves=int(overrides.get("num_leaves", 31)),
-            max_depth=int(overrides.get("max_depth", -1)),
-            min_child_samples=int(overrides.get("min_child_samples", 20)),
-            reg_lambda=float(overrides.get("reg_lambda", 0.0)),
-            scale_pos_weight=float(overrides.get("scale_pos_weight", 1.0)),
+            max_leaf_nodes=int(overrides.get("num_leaves", 31)),
+            max_depth=None if int(overrides.get("max_depth", -1)) < 0 else int(overrides["max_depth"]),
+            min_samples_leaf=int(overrides.get("min_child_samples", 20)),
+            l2_regularization=float(overrides.get("reg_lambda", 0.0)),
             random_state=int(overrides.get("random_state", 42)),
-            n_jobs=int(overrides.get("n_jobs", -1)),
-            verbose=-1,
         )
     else:
         raise ValueError(f"Unknown classical baseline architecture: {arch}")
+
+
+def _try_import_lightgbm():
+    """Try importing lightgbm; attempt a one-shot pip install on miss."""
+    try:
+        import lightgbm as lgb
+        return lgb
+    except ImportError:
+        pass
+    import subprocess
+    print("[classical] lightgbm not found — attempting `pip install lightgbm` ...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "lightgbm"],
+            check=True,
+        )
+        import lightgbm as lgb  # noqa: F401
+        return lgb
+    except Exception as exc:
+        print(f"[classical] lightgbm install failed: {exc}")
+        return None
+
+
+def _try_import_xgboost():
+    """Try importing xgboost; attempt a one-shot pip install on miss."""
+    try:
+        import xgboost as xgb
+        return xgb
+    except ImportError:
+        pass
+    import subprocess
+    print("[classical] xgboost not found — attempting `pip install xgboost` ...")
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "xgboost"],
+            check=True,
+        )
+        import xgboost as xgb  # noqa: F401
+        return xgb
+    except Exception as exc:
+        print(f"[classical] xgboost install failed: {exc}")
+        return None
+
+
+def build_regressor(arch: str, overrides: dict):
+    """Return a duration regressor matching the architecture family.
+
+    mahadevan2021 → XGBRegressor  (with HistGradientBoosting fallback)
+    ji2023        → LGBMRegressor (with HistGradientBoosting fallback)
+    """
+    if arch == "mahadevan2021":
+        xgb = _try_import_xgboost()
+        if xgb is not None:
+            return xgb.XGBRegressor(
+                n_estimators=int(overrides.get("reg_n_estimators", overrides.get("n_estimators", 300))),
+                learning_rate=float(overrides.get("reg_learning_rate", overrides.get("learning_rate", 0.05))),
+                max_depth=int(overrides.get("reg_max_depth", overrides.get("max_depth", 6))),
+                reg_lambda=float(overrides.get("reg_lambda", 1.0)),
+                subsample=float(overrides.get("subsample", 0.9)),
+                colsample_bytree=float(overrides.get("colsample_bytree", 0.9)),
+                random_state=int(overrides.get("random_state", 42)),
+                n_jobs=int(overrides.get("n_jobs", -1)),
+                objective="reg:squarederror",
+                tree_method="hist",
+            )
+    elif arch == "ji2023":
+        lgb = _try_import_lightgbm()
+        if lgb is not None:
+            return lgb.LGBMRegressor(
+                n_estimators=int(overrides.get("reg_n_estimators", overrides.get("n_estimators", 500))),
+                learning_rate=float(overrides.get("reg_learning_rate", overrides.get("learning_rate", 0.05))),
+                num_leaves=int(overrides.get("num_leaves", 31)),
+                max_depth=int(overrides.get("max_depth", -1)),
+                min_child_samples=int(overrides.get("min_child_samples", 20)),
+                reg_lambda=float(overrides.get("reg_lambda", 0.0)),
+                random_state=int(overrides.get("random_state", 42)),
+                n_jobs=int(overrides.get("n_jobs", -1)),
+                verbose=-1,
+            )
+    else:
+        raise ValueError(f"Unknown classical baseline architecture: {arch}")
+    # Fallback: sklearn HistGradientBoostingRegressor
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    print("[classical] boosted-tree regressor unavailable — falling back to "
+          "sklearn.HistGradientBoostingRegressor.")
+    return HistGradientBoostingRegressor(
+        max_iter=int(overrides.get("reg_n_estimators", overrides.get("n_estimators", 300))),
+        learning_rate=float(overrides.get("reg_learning_rate", overrides.get("learning_rate", 0.05))),
+        max_depth=None if int(overrides.get("max_depth", -1)) < 0 else int(overrides["max_depth"]),
+        min_samples_leaf=int(overrides.get("min_child_samples", 20)),
+        l2_regularization=float(overrides.get("reg_lambda", 0.0)),
+        random_state=int(overrides.get("random_state", 42)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +308,12 @@ def _build_predictions_df(
     return out
 
 
-def run_lofo(cfg: dict, args) -> None:
+def run_cv(cfg: dict, args) -> None:
+    """Cross-validated classical ML baseline.
+
+    Supports ``testing: LOFO`` (group by ``FOLD`` — 4 splits) and
+    ``testing: LOSO`` (group by ``PID`` — one split per subject).
+    """
     data_cfg = cfg.get("data", {})
     model_cfg = cfg.get("model", {})
     train_cfg = cfg.get("training", {})
@@ -193,6 +322,10 @@ def run_lofo(cfg: dict, args) -> None:
     arch = model_cfg["architecture"]
     overrides = model_cfg.get("overrides") or {}
     output_name = train_cfg["output"]
+    testing = str(train_cfg.get("testing", "LOFO")).upper()
+    if testing not in ("LOFO", "LOSO"):
+        raise ValueError(f"training.testing must be LOFO or LOSO (got {testing!r})")
+    group_col = "FOLD" if testing == "LOFO" else "PID"
 
     # ---- Output layout mirrors train_scratch.py ----
     dataset_name = os.path.basename(input_folder.rstrip("/raw"))
@@ -206,23 +339,24 @@ def run_lofo(cfg: dict, args) -> None:
 
     single_fold = args.single_fold or train_cfg.get("single_fold") or ""
 
-    # ---- Load data once; split per fold ----
-    print(f"[classical] loading data from {input_folder}")
+    # ---- Load data once; split per group ----
+    print(f"[classical] loading data from {input_folder}  (CV={testing})")
     df = load_data(input_folder)
-    df["FOLD"] = df["FOLD"].astype(str)
-    all_folds = sorted(df["FOLD"].unique())
-    folds = [single_fold] if single_fold else all_folds
+    df[group_col] = df[group_col].astype(str)
+    all_groups = sorted(df[group_col].unique())
+    groups = [single_fold] if single_fold else all_groups
+    print(f"[classical] {len(groups)} CV split(s) grouped by '{group_col}'")
 
     rng = np.random.default_rng(int(overrides.get("random_state", 42)))
     feat_names = feature_names()
 
-    for fold in folds:
-        print(f"\n[classical] ==== fold {fold} ====  arch={arch}")
+    for fold in groups:
+        print(f"\n[classical] ==== {group_col}={fold} ====  arch={arch}")
         t0 = time.time()
-        df_train = df[df["FOLD"] != fold]
-        df_test = df[df["FOLD"] == fold]
+        df_train = df[df[group_col] != fold]
+        df_test = df[df[group_col] == fold]
         if df_test.empty:
-            print(f"  [skip] fold {fold} has no test rows")
+            print(f"  [skip] {group_col}={fold} has no test rows")
             continue
 
         # ---- Feature extraction ----
@@ -237,6 +371,49 @@ def run_lofo(cfg: dict, args) -> None:
         # ---- Clean up NaNs (e.g. constant segments) ----
         X_tr = np.nan_to_num(X_tr, nan=0.0, posinf=0.0, neginf=0.0)
         X_te = np.nan_to_num(X_te, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # ---- Optional: DL-derived features (Paper 2) ----
+        use_dl = bool(overrides.get("use_dl_features", False))
+        if use_dl:
+            from baselines_classical.dl_features import train_and_extract_dl_features
+            try:
+                import torch as _torch
+                dl_device = "cuda" if _torch.cuda.is_available() else "cpu"
+            except ImportError:
+                dl_device = "cpu"
+            dl_max_len = int(overrides.get("dl_max_len", 1200))
+            dl_epochs = int(overrides.get("dl_epochs", 30))
+            dl_bs = int(overrides.get("dl_batch_size", 128))
+            dl_lr = float(overrides.get("dl_learning_rate", 1e-3))
+            oof_folds = int(overrides.get("dl_oof_folds", 5))
+            print(f"  [dl] extracting raw segments (max_len={dl_max_len}) for DL features on {dl_device} ...")
+            raw_tr, raw_seg_tr = extract_raw_segments_batch(df_train, max_len=dl_max_len)
+            raw_te, raw_seg_te = extract_raw_segments_batch(df_test,  max_len=dl_max_len)
+            # Realign raw tensors to the feature-batch segment order (defensive).
+            if not np.array_equal(raw_seg_tr, seg_tr):
+                order = pd.Series(np.arange(len(raw_seg_tr)), index=raw_seg_tr).reindex(seg_tr).values
+                raw_tr = raw_tr[order]
+            if not np.array_equal(raw_seg_te, seg_te):
+                order = pd.Series(np.arange(len(raw_seg_te)), index=raw_seg_te).reindex(seg_te).values
+                raw_te = raw_te[order]
+            # Subject ids per segment — required for subject-grouped DL val
+            # split and OOF-stacking (avoids within-subject leakage).
+            pid_by_seg = df_train.groupby("segment", sort=False, observed=True)["PID"].first().to_dict()
+            groups_tr = np.asarray([pid_by_seg.get(s) for s in seg_tr])
+            print(f"  [dl] subject-grouped val split: {len(np.unique(groups_tr))} unique PIDs; "
+                  f"oof_folds={oof_folds if oof_folds >= 2 else 0}")
+            dl_tr, dl_te = train_and_extract_dl_features(
+                raw_tr, y_tr.astype(np.int64), raw_te,
+                groups_tr=groups_tr,
+                oof_folds=oof_folds if oof_folds >= 2 else 0,
+                device=dl_device, epochs=dl_epochs,
+                batch_size=dl_bs, lr=dl_lr,
+                seed=int(overrides.get("random_state", 42)),
+                verbose=bool(overrides.get("dl_verbose", False)),
+            )
+            X_tr = np.concatenate([X_tr, dl_tr], axis=1).astype(np.float32)
+            X_te = np.concatenate([X_te, dl_te], axis=1).astype(np.float32)
+            print(f"  [dl] appended 10 DL features → X_tr {X_tr.shape}, X_te {X_te.shape}")
 
         # ---- Balance classes (Paper 1 convention; Paper 2 uses scale_pos_weight) ----
         if arch == "mahadevan2021":
@@ -254,19 +431,25 @@ def run_lofo(cfg: dict, args) -> None:
         else:
             keep = np.arange(X_tr.shape[1])
 
-        # ---- Regression target (mean scratch duration among scratch segments) ----
-        # Used as a simple surrogate for pr3 so R^2/MAE are defined.
-        pos_mean_dur = dur_tr[y_tr == 1].mean() if (y_tr == 1).any() else 0.0
-
         # ---- Fit classifier ----
         clf = build_classifier(arch, overrides)
-        # Paper 2: set scale_pos_weight from data if not supplied
-        if arch == "ji2023" and overrides.get("scale_pos_weight") is None:
+        clf_fit_kwargs = {}
+        if arch == "ji2023":
             n_pos = max(1, int(y_tr.sum()))
             n_neg = max(1, len(y_tr) - n_pos)
-            clf.scale_pos_weight = n_neg / n_pos
-        print(f"  fitting {type(clf).__name__} ...")
-        clf.fit(X_tr, y_tr)
+            override_spw = overrides.get("scale_pos_weight")
+            spw = float(override_spw) if override_spw is not None else n_neg / n_pos
+            if hasattr(clf, "scale_pos_weight"):
+                clf.scale_pos_weight = spw
+            else:
+                clf_fit_kwargs["sample_weight"] = np.where(y_tr == 1, spw, 1.0)
+        print(f"  fitting {type(clf).__name__} (classifier) ...")
+        clf.fit(X_tr, y_tr, **clf_fit_kwargs)
+
+        # ---- Fit duration regressor on same features ----
+        reg = build_regressor(arch, overrides)
+        print(f"  fitting {type(reg).__name__} (duration regressor) ...")
+        reg.fit(X_tr, dur_tr.astype(np.float32))
 
         # ---- Predict on held-out fold ----
         pr1 = clf.predict(X_te).astype(int)
@@ -274,7 +457,8 @@ def run_lofo(cfg: dict, args) -> None:
             pr1_prob = clf.predict_proba(X_te)[:, 1]
         else:
             pr1_prob = pr1.astype(float)
-        pr3 = pr1_prob * pos_mean_dur
+        pr3 = reg.predict(X_te).astype(float)
+        pr3 = np.clip(pr3, 0.0, None)  # duration is non-negative
 
         seg_to_pr1      = dict(zip(seg_te, pr1))
         seg_to_pr1_prob = dict(zip(seg_te, pr1_prob))
@@ -285,24 +469,24 @@ def run_lofo(cfg: dict, args) -> None:
         out_path = predictions_folder / f"Y_test_Y_pred_test_subject_{fold}.csv"
         out_df.to_csv(out_path, index=False)
 
-        # ---- Persist model (small, cheap) ----
+        # ---- Persist models (small, cheap) ----
         joblib.dump(
-            {"clf": clf, "feature_idx": keep, "feature_names": feat_names,
-             "pos_mean_dur": float(pos_mean_dur)},
+            {"clf": clf, "reg": reg, "feature_idx": keep, "feature_names": feat_names},
             models_folder / f"{arch}_test_subject_{fold}.joblib",
         )
 
-        # ---- Log a quick segment-level F1 for sanity ----
+        # ---- Log a quick segment-level sanity metric (F1, AUROC, R^2) ----
         try:
-            from sklearn.metrics import f1_score, roc_auc_score
+            from sklearn.metrics import f1_score, roc_auc_score, r2_score
             f1 = f1_score(y_te, pr1, zero_division=0)
             auc = roc_auc_score(y_te, pr1_prob) if len(set(y_te)) > 1 else float("nan")
-            print(f"  test F1={f1*100:.2f}  AUROC={auc*100:.2f}  "
+            r2 = r2_score(dur_te, pr3) if len(dur_te) > 1 and np.var(dur_te) > 0 else float("nan")
+            print(f"  test F1={f1*100:.2f}  AUROC={auc*100:.2f}  R2={r2:.3f}  "
                   f"n_test_segments={len(y_te)}  pos_rate={y_te.mean():.3f}  "
                   f"elapsed={time.time()-t0:.1f}s")
-            with open(logs_folder / f"sanity_fold_{fold}.txt", "w") as fp:
-                fp.write(f"fold={fold} F1={f1*100:.3f} AUROC={auc*100:.3f} "
-                         f"n_test_segments={len(y_te)}\n")
+            with open(logs_folder / f"sanity_{group_col}_{fold}.txt", "w") as fp:
+                fp.write(f"{group_col}={fold} F1={f1*100:.3f} AUROC={auc*100:.3f} "
+                         f"R2={r2:.3f} n_test_segments={len(y_te)}\n")
         except Exception as exc:
             print(f"  [warn] sanity metric failed: {exc}")
 
@@ -310,7 +494,7 @@ def run_lofo(cfg: dict, args) -> None:
 def main():
     args = parse_args()
     cfg = load_config(args.config)
-    run_lofo(cfg, args)
+    run_cv(cfg, args)
 
 
 if __name__ == "__main__":

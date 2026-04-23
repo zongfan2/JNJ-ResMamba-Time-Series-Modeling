@@ -1,10 +1,11 @@
 # =============================================================================
 # Baseline comparison — Ji et al. 2023 (npj Digital Medicine) — pragmatic
 # =============================================================================
-# LightGBM on the same 36 time/frequency features as Paper 1.  The full paper
-# adds 11 TDA (topological) features and 10 DL-derived features for a 348-dim
-# vector; we omit those in this pragmatic replication (clear deviation from
-# the paper — documented in the paper writeup).  Reference:
+# LightGBM on the same 36 time/frequency features as Paper 1 PLUS 10 DL-derived
+# features (5-dim penultimate activations of a small CNN + small BiLSTM, each
+# trained to classify scratch on the training fold).  This matches Paper 2's
+# DL-feature pipeline; we still omit the 11 TDA features (clear deviation
+# from the paper — documented in the writeup).  Reference:
 #   https://www.nature.com/articles/s41746-023-00821-y
 #
 # Usage:
@@ -13,9 +14,9 @@
 
 experiment:
   name: baseline_ji2023
-  description: "Paper 2 baseline (pragmatic) — LightGBM on 36 hand-crafted features."
+  description: "Paper 2 baseline (pragmatic) — LightGBM on 36 HC + 10 DL features."
   task: scratch_detection
-  date: "2026-04-22"
+  date: "2026-04-23"
 
 data:
   input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
@@ -25,6 +26,7 @@ data:
 model:
   architecture: ji2023
   overrides:
+    # LightGBM classifier
     n_estimators: 500
     learning_rate: 0.05
     num_leaves: 31
@@ -34,11 +36,25 @@ model:
     # scale_pos_weight: auto (neg/pos ratio) when null
     scale_pos_weight: null
     random_state: 42
+    # DL-derived features (5 from SmallCNN + 5 from SmallBiLSTM = 10).
+    # Data-leakage controls for LOSO:
+    #   * DL inner train/val split is subject-grouped (uses PID from df_train)
+    #     so early stopping mirrors the outer LOSO generalisation setting.
+    #   * `dl_oof_folds >= 2` enables group-K-fold OOF stacking: training
+    #     features for LightGBM come from DL nets that did NOT see those
+    #     segments during training.  Set to 0 to disable (faster but leakier).
+    use_dl_features: true
+    dl_max_len: 1200
+    dl_epochs: 15           # was 30; early-stop at patience=5 still active
+    dl_batch_size: 128
+    dl_learning_rate: 0.001
+    dl_oof_folds: 3         # was 5; still group-k-fold (leak-free)
+    dl_verbose: false
 
 training:
-  output: baseline-ji2023-fold4
+  output: baseline-ji2023-loso
   execution_mode: train
-  testing: LOFO
+  testing: LOSO
   num_gpu: 0
 
 reproducibility:

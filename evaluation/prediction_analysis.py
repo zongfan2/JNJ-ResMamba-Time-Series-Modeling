@@ -855,14 +855,16 @@ ABLATION_VARIANTS = {
     # Re-running after the size-1-batch BN failure — uncomment when done:
     # 'w/o Balanced Sampling':    'ablation-no_balanced-bs32-fold4',
     'Single-Task (Cls Only)':   'ablation-cls_only-bs32-fold4',
-    # Baseline comparisons — uncomment once the runs finish:
-    # 'ResNet1D':                 'baseline-resnet1d-bs32-fold4',
-    # 'MTCNA2':                   'baseline-mtcna2-bs32-fold4',
-    # 'PatchTST':                 'baseline-patchtst-bs32-fold4',
-    # 'EfficientUNet':            'baseline-efficientunet-bs32-fold4',
-    # 'Conv1DTS':                 'baseline-conv1dts-bs32-fold4',
-    # 'ViT1D':                    'baseline-vit1d-bs32-fold4',
-    # 'BiLSTM':                   'baseline-bilstm-bs32-fold4',
+    # Baseline comparisons — LOSO outputs (uncomment once runs finish):
+    # 'ResNet1D':                 'baseline-resnet1d-bs32-loso',
+    # 'MTCNA2':                   'baseline-mtcna2-bs32-loso',
+    # 'PatchTST':                 'baseline-patchtst-bs32-loso',
+    # 'EfficientUNet':            'baseline-efficientunet-bs32-loso',
+    # 'Conv1DTS':                 'baseline-conv1dts-bs32-loso',
+    # 'ViT1D':                    'baseline-vit1d-bs32-loso',
+    # 'BiLSTM':                   'baseline-bilstm-bs32-loso',
+    # 'Mahadevan2021 (XGB)':      'baseline-mahadevan2021-loso',
+    # 'Ji2023 (pragmatic)':       'baseline-ji2023-loso',
 }
 
 

@@ -29,14 +29,14 @@ model:
     dropout: 0.2
 
 training:
-  output: baseline-bilstm-bs32-fold4
+  output: baseline-bilstm-bs32-loso
   execution_mode: train
   epochs: 200
   batch_size: 32
   num_gpu: 0
   clear_tracker: true
   data_augmentation: 0
-  testing: LOFO
+  testing: LOSO
 
 transfer_learning:
   freeze_encoder: false

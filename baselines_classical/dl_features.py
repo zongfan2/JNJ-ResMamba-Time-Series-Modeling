@@ -149,16 +149,27 @@ def train_dl_model(
     X_tr_np, y_tr_np = X[tr_idx], y[tr_idx]
     X_va_np, y_va_np = X[val_idx], y[val_idx]
 
+    # Keep train/val tensors on CPU — a full train pool can be multi-GB
+    # (LOSO pools easily have >10k segments × 1200 × 3).  We move mini-batches
+    # to GPU on demand and free them immediately afterwards.
     X_tr = _prepare_input(X_tr_np, model.input_layout)
     y_tr = torch.from_numpy(y_tr_np).float()
-    X_va = _prepare_input(X_va_np, model.input_layout).to(device)
-    y_va = torch.from_numpy(y_va_np).float().to(device)
+    X_va = _prepare_input(X_va_np, model.input_layout)
+    y_va = torch.from_numpy(y_va_np).float()
 
-    loader = DataLoader(
+    train_loader = DataLoader(
         TensorDataset(X_tr, y_tr),
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
+        pin_memory=(device != "cpu"),
+    )
+    val_loader = DataLoader(
+        TensorDataset(X_va, y_va),
+        batch_size=batch_size,        # chunk val too — cuDNN LSTM allocates
+        shuffle=False,                # workspace ∝ batch_size, not segment len
+        num_workers=0,
+        pin_memory=(device != "cpu"),
     )
 
     n_pos = max(1, int(y_tr_np.sum()))
@@ -175,7 +186,7 @@ def train_dl_model(
 
     for epoch in range(epochs):
         model.train()
-        for xb, yb in loader:
+        for xb, yb in train_loader:
             xb = xb.to(device, non_blocking=True)
             yb = yb.to(device, non_blocking=True)
             opt.zero_grad()
@@ -186,7 +197,14 @@ def train_dl_model(
 
         model.eval()
         with torch.no_grad():
-            val_loss = criterion(model(X_va).squeeze(-1), y_va).item()
+            val_sum, val_count = 0.0, 0
+            for xb, yb in val_loader:
+                xb = xb.to(device, non_blocking=True)
+                yb = yb.to(device, non_blocking=True)
+                logits = model(xb).squeeze(-1)
+                val_sum += criterion(logits, yb).item() * xb.shape[0]
+                val_count += xb.shape[0]
+            val_loss = val_sum / max(1, val_count)
         if verbose:
             print(f"    dl epoch={epoch:02d}  val_loss={val_loss:.4f}")
         if val_loss < best_val - 1e-5:
@@ -244,20 +262,28 @@ def train_and_extract_dl_features(
         group.  The final training features are leak-free.  The test features
         still come from a model trained on all training data.
     """
+    def _free_cuda():
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
     def _train_pair(X, y, groups, seed):
         cnn = SmallCNN(in_channels=X.shape[-1])
         bilstm = SmallBiLSTM(in_channels=X.shape[-1])
         train_dl_model(cnn, X, y, groups=groups, device=device, epochs=epochs,
                        batch_size=batch_size, lr=lr, seed=seed, verbose=verbose)
+        _free_cuda()
         train_dl_model(bilstm, X, y, groups=groups, device=device, epochs=epochs,
                        batch_size=batch_size, lr=lr, seed=seed + 1, verbose=verbose)
+        _free_cuda()
         return cnn, bilstm
 
     def _extract_pair(cnn, bilstm, X):
-        return np.concatenate([
+        out = np.concatenate([
             extract_penultimate(cnn, X, device=device),
             extract_penultimate(bilstm, X, device=device),
         ], axis=1)
+        _free_cuda()
+        return out
 
     # ---- Test-set features: always from a model trained on ALL training data
     if verbose:

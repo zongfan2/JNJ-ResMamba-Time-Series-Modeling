@@ -59,7 +59,12 @@ class SmallCNN(nn.Module):
 
 
 class SmallBiLSTM(nn.Module):
-    """BiLSTM + MLP(16, 5, 1).  Penultimate = 5-dim."""
+    """BiLSTM + MLP(16, 5, 1).  Penultimate = 5-dim.
+
+    Uses a mask-aware mean pool so that right-padded zero tails do not
+    dilute the temporal aggregate (critical when segments have variable
+    length and were right-padded to a common `dl_max_len`).
+    """
 
     input_layout: str = "BLC"
 
@@ -76,8 +81,12 @@ class SmallBiLSTM(nn.Module):
 
     def features(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, L, C] → [B, penultimate_dim]."""
-        out, _ = self.lstm(x)
-        pooled = out.mean(dim=1)  # temporal mean
+        out, _ = self.lstm(x)  # [B, L, 2*H]
+        # Mask: True for timesteps with any non-zero channel (real data).
+        # Falls back to uniform mean if a sample is all-zero (unlikely).
+        valid = (x.abs().sum(dim=-1) > 0).float()           # [B, L]
+        counts = valid.sum(dim=1, keepdim=True).clamp(min=1)  # [B, 1]
+        pooled = (out * valid.unsqueeze(-1)).sum(dim=1) / counts
         x = F.relu(self.fc1(pooled))
         return self.fc2(x)
 
@@ -217,6 +226,13 @@ def train_dl_model(
                 break
 
     model.load_state_dict(best_state)
+    # Always emit a one-line summary so it's easy to tell if training
+    # actually converged (or early-stopped at random init).
+    print(
+        f"  [dl] {type(model).__name__:<12s} done  "
+        f"best_val_loss={best_val:.4f}  "
+        f"epochs_run={epoch + 1}  n_tr={len(tr_idx)} n_va={len(val_idx)}"
+    )
     return model
 
 
@@ -266,6 +282,31 @@ def train_and_extract_dl_features(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+    def _fit_standardizer(X):
+        """Per-channel mean/std computed over non-zero (real) samples only.
+
+        Right-padded zero tails are excluded so the standardiser reflects
+        the distribution of actual accelerometer data, not the padding.
+        """
+        valid = (np.abs(X).sum(axis=-1) > 0)  # [N, L] bool
+        # reshape to [T, C] over valid points per channel
+        flat = X.reshape(-1, X.shape[-1])
+        mask = valid.reshape(-1)
+        real = flat[mask]
+        if real.size == 0:
+            real = flat  # fallback (shouldn't happen)
+        mean = real.mean(axis=0).astype(np.float32)
+        std = real.std(axis=0).astype(np.float32)
+        std = np.where(std < 1e-6, 1.0, std)
+        return mean, std
+
+    def _standardize(X, mean, std):
+        """Apply z-score; preserve zero padding (pad stays 0 after scaling)."""
+        valid = (np.abs(X).sum(axis=-1) > 0)  # [N, L]
+        out = (X - mean) / std
+        out[~valid] = 0.0
+        return out.astype(np.float32)
+
     def _train_pair(X, y, groups, seed):
         cnn = SmallCNN(in_channels=X.shape[-1])
         bilstm = SmallBiLSTM(in_channels=X.shape[-1])
@@ -285,11 +326,16 @@ def train_and_extract_dl_features(
         _free_cuda()
         return out
 
-    # ---- Test-set features: always from a model trained on ALL training data
+    # ---- Test-set features: trained on ALL training data, standardised by
+    # training-pool channel stats.
+    mean_full, std_full = _fit_standardizer(X_raw_tr)
+    X_tr_std = _standardize(X_raw_tr, mean_full, std_full)
+    X_te_std = _standardize(X_raw_te, mean_full, std_full)
     if verbose:
+        print(f"  [dl] train channel mean={mean_full.tolist()} std={std_full.tolist()}")
         print("  [dl] training final CNN+BiLSTM on full training data ...")
-    cnn_full, bilstm_full = _train_pair(X_raw_tr, y_tr, groups_tr, seed)
-    te = _extract_pair(cnn_full, bilstm_full, X_raw_te)
+    cnn_full, bilstm_full = _train_pair(X_tr_std, y_tr, groups_tr, seed)
+    te = _extract_pair(cnn_full, bilstm_full, X_te_std)
 
     # ---- Training-set features: naive or OOF
     if oof_folds and oof_folds >= 2 and groups_tr is not None:
@@ -304,13 +350,18 @@ def train_and_extract_dl_features(
             if verbose:
                 print(f"    [dl-oof] fold {fold_i + 1}/{oof_folds} "
                       f"train={len(tr_idx)}  holdout={len(va_idx)}")
+            # Each OOF fold must re-fit its own standardiser on its own
+            # training subjects — otherwise the holdout's statistics leak in.
+            mean_k, std_k = _fit_standardizer(X_raw_tr[tr_idx])
+            X_in = _standardize(X_raw_tr[tr_idx], mean_k, std_k)
+            X_hold = _standardize(X_raw_tr[va_idx], mean_k, std_k)
             cnn_k, bilstm_k = _train_pair(
-                X_raw_tr[tr_idx], y_tr[tr_idx],
+                X_in, y_tr[tr_idx],
                 np.asarray(groups_tr)[tr_idx],
                 seed + 10 * (fold_i + 1),
             )
-            tr[va_idx] = _extract_pair(cnn_k, bilstm_k, X_raw_tr[va_idx])
+            tr[va_idx] = _extract_pair(cnn_k, bilstm_k, X_hold)
     else:
-        tr = _extract_pair(cnn_full, bilstm_full, X_raw_tr)
+        tr = _extract_pair(cnn_full, bilstm_full, X_tr_std)
 
     return tr, te

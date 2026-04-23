@@ -21,6 +21,7 @@
 #   no_mamba              — blocks_MBA1 = 0
 #   no_resnet             — num_feature_layers = 0
 #   no_cross_attn         — use_skip_cross_attention = false
+#   no_cross_attn_dino    — no_cross_attn + DINO pretrained encoder
 #   no_balanced           — stratify = false
 #   cls_only              — wl2 = wl3 = 0
 #
@@ -32,9 +33,14 @@
 #   baseline_conv1dts     — Dilated 1D CNN
 #   baseline_vit1d        — 1D Vision Transformer
 #   baseline_bilstm       — Bidirectional LSTM
+#   baseline_mahadevan2021 — classical: RandomForest + 36 hand-crafted features
+#   baseline_ji2023       — classical: LightGBM + 36 hand-crafted features (TDA/DL omitted)
 #
-# Extra CLI args after the variant are forwarded to train_scratch.py, e.g.:
+# Extra CLI args after the variant are forwarded to the training script, e.g.:
 #   bash run_ablation.sh no_mamba --num_gpu 2
+#
+# Classical baselines (mahadevan2021 / ji2023) dispatch to
+# training/train_classical.py; everything else uses training/train_scratch.py.
 
 set -euo pipefail
 
@@ -53,6 +59,7 @@ VALID_VARIANTS=(
     no_mamba
     no_resnet
     no_cross_attn
+    no_cross_attn_dino
     no_balanced
     cls_only
     baseline_resnet1d
@@ -62,6 +69,8 @@ VALID_VARIANTS=(
     baseline_conv1dts
     baseline_vit1d
     baseline_bilstm
+    baseline_mahadevan2021
+    baseline_ji2023
 )
 
 if [[ $# -lt 1 ]]; then
@@ -99,6 +108,16 @@ echo "   variant: ${VARIANT}"
 echo "   config:  ${CONFIG}"
 echo "=============================================="
 
-python3.11 "${ROOT_DIR}/training/train_scratch.py" \
+# Classical ML baselines use a different runner.
+case "${VARIANT}" in
+    baseline_mahadevan2021|baseline_ji2023)
+        RUNNER="${ROOT_DIR}/training/train_classical.py"
+        ;;
+    *)
+        RUNNER="${ROOT_DIR}/training/train_scratch.py"
+        ;;
+esac
+
+python3.11 "${RUNNER}" \
     --config "${CONFIG}" \
     "$@"

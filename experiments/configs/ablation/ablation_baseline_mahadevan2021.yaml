@@ -1,0 +1,42 @@
+# =============================================================================
+# Baseline comparison — Mahadevan et al. 2021 (npj Digital Medicine)
+# =============================================================================
+# Random Forest (50 trees) on 26 RFECV-selected features drawn from 36 time-
+# and frequency-domain statistics computed on SVM/PC1/PC2 of the 0.25 Hz
+# high-pass-filtered 3-axis accelerometer signal.  Reference:
+#   https://www.nature.com/articles/s41746-021-00402-x
+#
+# This is a classical ML baseline; it runs via training/train_classical.py
+# rather than training/train_scratch.py.
+#
+# Usage:
+#   python3.11 training/train_classical.py \
+#     --config experiments/configs/ablation/ablation_baseline_mahadevan2021.yaml
+
+experiment:
+  name: baseline_mahadevan2021
+  description: "Paper 1 baseline — RandomForest + 36 hand-crafted features."
+  task: scratch_detection
+  date: "2026-04-22"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: ""
+
+model:
+  architecture: mahadevan2021
+  overrides:
+    n_estimators: 50
+    num_features: 26
+    random_state: 42
+
+training:
+  output: baseline-mahadevan2021-fold4
+  execution_mode: train
+  testing: LOFO
+  num_gpu: 0
+
+reproducibility:
+  random_seed: 42
+  numpy_seed: 42

@@ -392,23 +392,43 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
     elif table_kind == 'main':
         to_latex_main_results(summary_df, tex_path)
 
-    # Print final summary table with both mean±std and pooled F1
-    print("\n" + "=" * 100)
-    print(f"  PAPER TABLE SUMMARY ({table_kind})")
-    print("=" * 100)
-    header = f"{'Variant':<35} {'F1 (mean±std)':>15} {'F1 (pooled)':>13} {'Precision':>15} {'Recall':>15} {'AUROC':>15} {'R2':>12} {'MAE':>12}"
-    print(header)
-    print("-" * 100)
-    for _, row in summary_df.iterrows():
-        f1_str = f"{row['F1_mean']:.2f}±{row['F1_std']:.2f}"
-        f1_pooled = f"{row['F1_pooled']:.2f}" if 'F1_pooled' in row and pd.notna(row.get('F1_pooled')) else "N/A"
-        prec_str = f"{row['Precision_mean']:.2f}±{row['Precision_std']:.2f}"
-        rec_str = f"{row['Recall_mean']:.2f}±{row['Recall_std']:.2f}"
-        auroc_str = f"{row['AUROC_mean']:.2f}±{row['AUROC_std']:.2f}"
-        r2_str = f"{row['R2_mean']:.3f}±{row['R2_std']:.3f}"
-        mae_str = f"{row['MAE_mean']:.3f}±{row['MAE_std']:.3f}"
-        print(f"{row['variant']:<35} {f1_str:>15} {f1_pooled:>13} {prec_str:>15} {rec_str:>15} {auroc_str:>15} {r2_str:>12} {mae_str:>12}")
-    print("=" * 100)
+    # Print final summary table: per-fold mean±std AND pooled (all folds
+    # concatenated) for every paper metric.  Emitted as two compact tables
+    # so each column stays readable.
+    _precision = {'F1': 2, 'Precision': 2, 'Recall': 2, 'AUROC': 2, 'R2': 3, 'MAE': 3}
+
+    def _fmt_mean_std(row, col):
+        m, s = row.get(f'{col}_mean'), row.get(f'{col}_std')
+        if pd.isna(m) or pd.isna(s):
+            return "N/A"
+        p = _precision[col]
+        return f"{m:.{p}f}±{s:.{p}f}"
+
+    def _fmt_pooled(row, col):
+        v = row.get(f'{col}_pooled')
+        if pd.isna(v):
+            return "N/A"
+        p = _precision[col]
+        return f"{v:.{p}f}"
+
+    variant_w = max(len('Variant'), *(len(r['variant']) for _, r in summary_df.iterrows())) + 2
+    col_w = 18
+
+    def _print_table(title, formatter):
+        total_w = variant_w + col_w * len(PAPER_METRIC_COLS) + 2
+        print("\n" + "=" * total_w)
+        print(f"  {title}")
+        print("=" * total_w)
+        header = f"{'Variant':<{variant_w}}" + "".join(f"{col:>{col_w}}" for col in PAPER_METRIC_COLS)
+        print(header)
+        print("-" * total_w)
+        for _, row in summary_df.iterrows():
+            cells = "".join(f"{formatter(row, col):>{col_w}}" for col in PAPER_METRIC_COLS)
+            print(f"{row['variant']:<{variant_w}}" + cells)
+        print("=" * total_w)
+
+    _print_table(f"PAPER TABLE SUMMARY ({table_kind}) — per-fold mean ± std", _fmt_mean_std)
+    _print_table(f"PAPER TABLE SUMMARY ({table_kind}) — pooled (all folds concatenated)", _fmt_pooled)
 
     return summary_df, per_fold_dict
 

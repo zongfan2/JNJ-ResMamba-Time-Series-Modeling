@@ -1,0 +1,49 @@
+# =============================================================================
+# Ablation — "w/o Cross-Attention + DINO pretrain"
+# =============================================================================
+# Combines the `no_cross_attn` variant (U-shaped skip connections between the
+# ResNet encoder and Mamba decoder disabled) with the `full_with_dino`
+# initialization (encoder weights loaded from the UKB DINO checkpoint).
+#
+# Motivation: in the current ablation sweep, `no_cross_attn` (no pretrain)
+# surpasses `full_no_pretrain`.  This variant checks whether that benefit
+# compounds with DINO pretraining.
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_no_cross_attn_dino.yaml
+
+experiment:
+  name: ablation_no_cross_attn_dino
+  description: "MBA_v1 w/o cross-attention skips, fine-tuned from UKB DINO encoder."
+  task: scratch_detection
+  date: "2026-04-22"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+model:
+  architecture: mbav1
+  overrides:
+    use_skip_cross_attention: false  # pass None for encoder_states in decoder
+
+training:
+  output: ablation-no_cross_attn-dino_pretrain-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/pretrain_dino/weights/DINO_encoder_only.pth
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

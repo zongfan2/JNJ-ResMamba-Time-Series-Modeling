@@ -14,7 +14,7 @@
 
 experiment:
   name: baseline_ji2023
-  description: "Paper 2 baseline (pragmatic) — LightGBM on 36 HC + 10 DL features."
+  description: "Paper 2 baseline (pragmatic) — LightGBM on 36 hand-crafted features (DL features disabled)."
   task: scratch_detection
   date: "2026-04-23"
 
@@ -43,9 +43,10 @@ model:
     #   * `dl_oof_folds >= 2` enables group-K-fold OOF stacking: training
     #     features for LightGBM come from DL nets that did NOT see those
     #     segments during training.  Set to 0 to disable (faster but leakier).
-    use_dl_features: true
+    use_dl_features: false
     dl_max_len: 1200
-    dl_epochs: 15           # was 30; early-stop at patience=5 still active
+    dl_epochs: 30           # patience=5 early-stop still active; runs that
+                            # converge stop ~15–20, unconverged ones get more
     dl_batch_size: 128
     dl_learning_rate: 0.001
     dl_oof_folds: 3         # was 5; still group-k-fold (leak-free)

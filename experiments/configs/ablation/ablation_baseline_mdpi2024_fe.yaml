@@ -35,8 +35,11 @@ model:
     max_depth: 3
     subsample: 1.0
     random_state: 42
-    # tsfresh: 0 = single-process (usually fastest for short segments)
-    tsfresh_n_jobs: 0
+    # tsfresh knobs — LOSO pools are large, use all CPUs + progress bar.
+    # feature set options: comprehensive (paper, slowest) | efficient (~3x faster) | minimal
+    tsfresh_n_jobs: -1          # -1 = all CPU cores; 0 = single process (very slow)
+    tsfresh_feature_set: comprehensive
+    tsfresh_progress: true
     # Duration regression — zero-inflated target: train on positives only
     # and let prediction_analysis apply the hard pr1==0 → pr3=0 gate.
     reg_hurdle: true

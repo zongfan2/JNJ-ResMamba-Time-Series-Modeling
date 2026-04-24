@@ -28,10 +28,20 @@ import pandas as pd
 
 
 def _try_import_tsfresh():
+    """Return (extract_fn, settings_map) or (None, None) on failure."""
     try:
         from tsfresh import extract_features as _extract
-        from tsfresh.feature_extraction import ComprehensiveFCParameters
-        return _extract, ComprehensiveFCParameters
+        from tsfresh.feature_extraction import (
+            ComprehensiveFCParameters,
+            EfficientFCParameters,
+            MinimalFCParameters,
+        )
+        settings = {
+            "comprehensive": ComprehensiveFCParameters,
+            "efficient": EfficientFCParameters,
+            "minimal": MinimalFCParameters,
+        }
+        return _extract, settings
     except ImportError:
         pass
     import subprocess
@@ -43,8 +53,17 @@ def _try_import_tsfresh():
             check=True,
         )
         from tsfresh import extract_features as _extract
-        from tsfresh.feature_extraction import ComprehensiveFCParameters
-        return _extract, ComprehensiveFCParameters
+        from tsfresh.feature_extraction import (
+            ComprehensiveFCParameters,
+            EfficientFCParameters,
+            MinimalFCParameters,
+        )
+        settings = {
+            "comprehensive": ComprehensiveFCParameters,
+            "efficient": EfficientFCParameters,
+            "minimal": MinimalFCParameters,
+        }
+        return _extract, settings
     except Exception as exc:
         print(f"[mdpi2024_fe] tsfresh install failed: {exc}")
         return None, None
@@ -80,8 +99,9 @@ def extract_tsfresh_features_batch(
     df: pd.DataFrame,
     seg_col: str = "segment",
     xyz_cols=("x", "y", "z"),
-    n_jobs: int = 0,
-    disable_progressbar: bool = True,
+    n_jobs: int = -1,
+    disable_progressbar: bool = False,
+    feature_set_type: str = "comprehensive",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, list[str]]:
     """Return (X, y, dur, seg_ids, feature_names) for the Xing 2024 FE pipeline.
 
@@ -90,21 +110,31 @@ def extract_tsfresh_features_batch(
             ``segment_scratch``, ``scratch_duration`` columns.
         seg_col: segment-id column name.
         xyz_cols: the three accelerometer columns.
-        n_jobs: tsfresh parallelism (0 = off, which is usually fastest for
-                small segments because of process-startup overhead).
+        n_jobs: tsfresh parallelism.  ``-1`` (default) uses all CPU cores,
+                ``0`` disables multiprocessing (very slow on LOSO pools).
+        disable_progressbar: hide tsfresh's per-series progress bar.
+        feature_set_type: one of {"comprehensive", "efficient", "minimal"}.
+            - "comprehensive" ≈ 794 features / axis (paper default, slowest)
+            - "efficient"     ≈ 600 features / axis, skips CPU-heavy ones (~3× faster)
+            - "minimal"       ≈ 10 features / axis (use for smoke tests)
 
     Returns:
-        X: [N_segments, F] feature matrix (F ≈ 2350+ depending on tsfresh).
+        X: [N_segments, F] feature matrix.
         y: [N_segments] binary scratch label.
         dur: [N_segments] scratch duration.
         seg_ids: [N_segments] str ids (aligned with X rows).
         feature_names: list[str] of length F (column names).
     """
-    tsfresh_extract, ComprehensiveFCParameters = _try_import_tsfresh()
+    tsfresh_extract, settings_map = _try_import_tsfresh()
     if tsfresh_extract is None:
         raise ImportError(
             "mdpi2024_fe baseline requires tsfresh. Install via `pip install tsfresh`."
         )
+    if feature_set_type not in settings_map:
+        raise ValueError(
+            f"feature_set_type must be one of {list(settings_map)}, got {feature_set_type!r}"
+        )
+    SettingsCls = settings_map[feature_set_type]
 
     # Build long-format tsfresh frame, one row per (segment, channel, time).
     # tsfresh expects id = unique-per-series, so we use f"{seg}__{axis}".
@@ -134,7 +164,11 @@ def extract_tsfresh_features_batch(
         )
 
     long_df = pd.concat(long_parts, ignore_index=True)
-    settings = ComprehensiveFCParameters()
+    settings = SettingsCls()
+    n_series = len(seg_list) * len(xyz_cols)
+    print(f"  [tsfresh] feature_set={feature_set_type} n_jobs={n_jobs} "
+          f"n_series={n_series} (segments × axes) "
+          f"rows={len(long_df):,}")
     ts_feat = tsfresh_extract(
         long_df,
         column_id="id",

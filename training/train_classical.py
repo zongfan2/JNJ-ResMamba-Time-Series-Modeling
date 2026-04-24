@@ -409,15 +409,22 @@ def run_cv(cfg: dict, args) -> None:
         feature_set = str(overrides.get("feature_set", "default")).lower()
         if feature_set in ("tsfresh", "mdpi2024"):
             from baselines_classical.tsfresh_features import extract_tsfresh_features_batch
+            ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))  # -1 = all CPUs
+            ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
+            ts_progress = bool(overrides.get("tsfresh_progress", True))
             print(f"  extracting tsfresh features on {df_train['segment'].nunique()} train segments ...")
             X_tr, y_tr, dur_tr, seg_tr, tsf_names = extract_tsfresh_features_batch(
                 df_train,
-                n_jobs=int(overrides.get("tsfresh_n_jobs", 0)),
+                n_jobs=ts_jobs,
+                feature_set_type=ts_set,
+                disable_progressbar=not ts_progress,
             )
             print(f"  extracting tsfresh features on {df_test['segment'].nunique()} test  segments ...")
             X_te, y_te, dur_te, seg_te, _ = extract_tsfresh_features_batch(
                 df_test,
-                n_jobs=int(overrides.get("tsfresh_n_jobs", 0)),
+                n_jobs=ts_jobs,
+                feature_set_type=ts_set,
+                disable_progressbar=not ts_progress,
             )
             feat_names_fold = tsf_names
         else:

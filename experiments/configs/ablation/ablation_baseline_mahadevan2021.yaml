@@ -38,6 +38,10 @@ model:
     # feature selection
     num_features: 26
     random_state: 42
+    # Duration regression — zero-inflated target; train reg on positives
+    # only and gate by p_scratch (pr3 = p * E[dur|scratch]).
+    reg_hurdle: true
+    reg_log_target: true
 
 training:
   output: baseline-mahadevan2021-loso

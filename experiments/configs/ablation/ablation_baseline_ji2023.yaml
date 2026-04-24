@@ -43,6 +43,13 @@ model:
     #   * `dl_oof_folds >= 2` enables group-K-fold OOF stacking: training
     #     features for LightGBM come from DL nets that did NOT see those
     #     segments during training.  Set to 0 to disable (faster but leakier).
+    # Duration regression — `scratch_duration` is zero-inflated (0 on all
+    # non-scratch segments).  `reg_hurdle: true` trains the regressor on
+    # positives only and gates output by p_scratch so pr3 = p * E[dur|pos].
+    # `reg_log_target: true` fits log1p(dur) for a more symmetric tail.
+    reg_hurdle: true
+    reg_log_target: true
+
     use_dl_features: false
     dl_max_len: 1200
     dl_epochs: 30           # patience=5 early-stop still active; runs that

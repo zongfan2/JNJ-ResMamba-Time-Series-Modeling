@@ -468,10 +468,34 @@ def run_cv(cfg: dict, args) -> None:
         print(f"  fitting {type(clf).__name__} (classifier) ...")
         clf.fit(X_tr, y_tr, **clf_fit_kwargs)
 
-        # ---- Fit duration regressor on same features ----
+        # ---- Fit duration regressor (two-stage hurdle model) ----
+        # `scratch_duration` is zero-inflated: every non-scratch segment is
+        # exactly 0, a smaller positive tail for scratch segments.  A naive
+        # regressor trained on all segments predicts ≈ 0 (matches the mode),
+        # giving R^2 ≈ 0.  Train the regressor ONLY on positive segments —
+        # it now learns E[duration | scratch=1], which has a well-behaved
+        # non-degenerate distribution — and gate its output by the
+        # classifier's probability:  pr3 = p_scratch * E[duration | scratch].
+        # Optional log1p transform further symmetrises the positive tail.
+        hurdle = bool(overrides.get("reg_hurdle", True))
+        log_target = bool(overrides.get("reg_log_target", True))
+
         reg = build_regressor(arch, overrides)
-        print(f"  fitting {type(reg).__name__} (duration regressor) ...")
-        reg.fit(X_tr, dur_tr.astype(np.float32))
+        if hurdle and (y_tr == 1).any():
+            pos_mask = (y_tr == 1)
+            X_reg = X_tr[pos_mask]
+            y_reg = dur_tr[pos_mask].astype(np.float32)
+            n_reg = int(pos_mask.sum())
+            print(f"  fitting {type(reg).__name__} (hurdle duration regressor) "
+                  f"on {n_reg} positive-only segments; log_target={log_target}")
+        else:
+            X_reg = X_tr
+            y_reg = dur_tr.astype(np.float32)
+            print(f"  fitting {type(reg).__name__} (duration regressor) "
+                  f"on {len(y_reg)} segments (hurdle disabled)")
+
+        y_fit = np.log1p(y_reg) if log_target else y_reg
+        reg.fit(X_reg, y_fit)
 
         # ---- Predict on held-out fold ----
         pr1 = clf.predict(X_te).astype(int)
@@ -479,8 +503,15 @@ def run_cv(cfg: dict, args) -> None:
             pr1_prob = clf.predict_proba(X_te)[:, 1]
         else:
             pr1_prob = pr1.astype(float)
-        pr3 = reg.predict(X_te).astype(float)
-        pr3 = np.clip(pr3, 0.0, None)  # duration is non-negative
+
+        reg_raw = reg.predict(X_te).astype(float)
+        if log_target:
+            reg_raw = np.expm1(reg_raw)
+        reg_raw = np.clip(reg_raw, 0.0, None)  # duration is non-negative
+        if hurdle:
+            pr3 = pr1_prob * reg_raw  # gate by predicted scratch probability
+        else:
+            pr3 = reg_raw
 
         seg_to_pr1      = dict(zip(seg_te, pr1))
         seg_to_pr1_prob = dict(zip(seg_te, pr1_prob))

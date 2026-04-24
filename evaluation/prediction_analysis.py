@@ -865,6 +865,8 @@ ABLATION_VARIANTS = {
     'w/o Mamba Encoder':        'ablation-no_mamba-bs32-fold4',
     'w/o ResNet Mapping':       'ablation-no_resnet-bs32-fold4',
     'w/o Cross-Attention':      'ablation-no_cross_attn-bs32-fold4',
+    # DINO-pretrained variant of w/o Cross-Attention — uncomment when the run finishes:
+    # 'w/o Cross-Attention (DINO)': 'ablation-no_cross_attn-dino_pretrain-bs32-fold4',
     # Re-running after the size-1-batch BN failure — uncomment when done:
     # 'w/o Balanced Sampling':    'ablation-no_balanced-bs32-fold4',
     'Single-Task (Cls Only)':   'ablation-cls_only-bs32-fold4',

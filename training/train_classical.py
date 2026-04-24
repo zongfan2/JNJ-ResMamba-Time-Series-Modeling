@@ -384,7 +384,10 @@ def run_cv(cfg: dict, args) -> None:
 
     # ---- Load data once; split per group ----
     print(f"[classical] loading data from {input_folder}  (CV={testing})")
-    df = load_data(input_folder)
+    # filter_type=None disables the built-in segment-length/energy filter in
+    # load_data; classical baselines train on all segments (motion and
+    # non-motion) so the LOSO test set isn't silently pre-filtered.
+    df = load_data(input_folder, filter_type=None)
     df[group_col] = df[group_col].astype(str)
     all_groups = sorted(df[group_col].unique())
     groups = [single_fold] if single_fold else all_groups

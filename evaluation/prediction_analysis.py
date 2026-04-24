@@ -142,14 +142,24 @@ PAPER_METRIC_COLS = ['F1', 'Precision', 'Recall', 'AUROC', 'R2', 'MAE']
 
 
 def compute_paper_metrics(segments_df):
-    """Compute the six paper-table metrics on a segment-level DataFrame."""
+    """Compute the six paper-table metrics on a segment-level DataFrame.
+
+    Delegates to :func:`get_metrics` so the numbers are guaranteed to match
+    the legacy per-patient / global analysis teammates run via ``main()``.
+    ``get_metrics`` expects the un-aggregated frame-level DataFrame and does
+    its own ``groupby('segment').max(1)`` — but it uses only the segment-level
+    columns (gt1, pr1, gt3, pr3) for the paper metrics, so passing the already
+    aggregated frame here produces identical numbers (every row is its own
+    segment after aggregation).
+    """
+    legacy = get_metrics(segments_df, suffix='g')
     return {
-        'F1':        metrics.f1_score(segments_df.gt1, segments_df.pr1, zero_division=0) * 100,
-        'Precision': metrics.precision_score(segments_df.gt1, segments_df.pr1, zero_division=0) * 100,
-        'Recall':    metrics.recall_score(segments_df.gt1, segments_df.pr1, zero_division=0) * 100,
-        'AUROC':     metrics.roc_auc_score(segments_df.gt1, segments_df.pr1) * 100,
-        'R2':        metrics.r2_score(segments_df.gt3, segments_df.pr3),
-        'MAE':       metrics.mean_absolute_error(segments_df.gt3, segments_df.pr3),
+        'F1':        legacy['F1_1_g'],
+        'Precision': legacy['Precision_1_g'],
+        'Recall':    legacy['Recall_1_g'],
+        'AUROC':     legacy['ROC_AUC_1_g'],
+        'R2':        legacy['R2_g'],
+        'MAE':       legacy['MAE_g'],
     }
 
 
@@ -185,13 +195,16 @@ def build_variant_results(variant_label, model_name, folder_path, df_rest):
               f"{os.path.join(folder_path, model_name)}")
         return None, None
 
-    # Mirror the segment-level derived columns from main().
+    # Mirror the segment-level derived columns from main() *exactly* so the
+    # paper table numbers match what teammates compute via get_metrics + the
+    # legacy analysis path.  Order and each step are load-bearing.
     dfp.loc[:, 'pr3_2'] = dfp.groupby('segment')['pr2'].transform('sum')
     dfp['pr1_2'] = 0
     dfp.loc[dfp['pr3_2'] > 20, 'pr1_2'] = 1
     dfp.loc[:, 'length'] = dfp.groupby('segment')['pr2'].transform('count')
     dfp['gt3'] = (dfp['gt3'] * dfp['length']) / 20
     dfp['pr3'] = (dfp['pr3'] * dfp['length']) / 20
+    dfp['pr3_2'] = dfp['pr3_2'] / 20   # match main(): normalise to seconds
     dfp.loc[dfp.pr1 == 0, ['pr3', 'pr3_2']] = 0
     dfp.loc[dfp.pr3 < 0, ['pr3']] = 0
 

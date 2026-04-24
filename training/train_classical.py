@@ -508,10 +508,13 @@ def run_cv(cfg: dict, args) -> None:
         if log_target:
             reg_raw = np.expm1(reg_raw)
         reg_raw = np.clip(reg_raw, 0.0, None)  # duration is non-negative
-        if hurdle:
-            pr3 = pr1_prob * reg_raw  # gate by predicted scratch probability
-        else:
-            pr3 = reg_raw
+        # NOTE: do NOT multiply by pr1_prob here.  evaluation/prediction_analysis.py
+        # applies a hard gate `dfp.loc[dfp.pr1 == 0, 'pr3'] = 0` during metric
+        # computation, so a soft probability gate here would double-attenuate
+        # (pr3 = p * reg * [pr1==1]) and systematically under-scale predictions
+        # for positive segments — directly hurting R^2.  Write the raw regressor
+        # output; prediction_analysis does the hurdle step during scoring.
+        pr3 = reg_raw
 
         seg_to_pr1      = dict(zip(seg_te, pr1))
         seg_to_pr1_prob = dict(zip(seg_te, pr1_prob))

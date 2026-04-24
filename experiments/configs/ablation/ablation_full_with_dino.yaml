@@ -11,7 +11,7 @@
 
 experiment:
   name: ablation_full_with_dino
-  description: "Full MBA_v1 fine-tuned from UKB DINO encoder, 4-fold CV."
+  description: "Full MBA_v1 fine-tuned from UKB DINO encoder, LOSO CV."
   task: scratch_detection
   date: "2026-04-15"
 
@@ -25,14 +25,14 @@ model:
   overrides: {}
 
 training:
-  output: ablation-full-dino_pretrain-bs32-fold4
+  output: ablation-full-dino_pretrain-bs32-loso
   execution_mode: train
   epochs: 200
   batch_size: 32
   num_gpu: 0
   clear_tracker: true
   data_augmentation: 0
-  testing: LOFO
+  testing: LOSO
 
 transfer_learning:
   freeze_encoder: false

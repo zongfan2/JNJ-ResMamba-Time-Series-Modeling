@@ -25,10 +25,13 @@ model:
   overrides:
     # ViT1D hyperparameters (see setup_model "vit1d" case)
     patch_size: 60
-    stride: 10
-    encoder_layers: 4
-    decoder_layers: 0
-    num_heads: 4
+    stride: 30                # was 10 — cut overlap, ~39 tokens instead of 117
+    encoder_layers: 7         # was 4; deeper backbone
+    decoder_layers: 0         # not used by supervised forward(); keep at 0
+    num_heads: 8              # was 4; cleaner head_dim division with embed_dim=256
+    embed_dim: 256            # was None → 180 (= 60x3, awkward for 4-head attn)
+    use_embedding: true       # was false — add missing learned patch projection
+    pos_learnable: false      # sinusoidal; generalises better across segment lengths
     average_mask: false
     supcon_loss: false
 

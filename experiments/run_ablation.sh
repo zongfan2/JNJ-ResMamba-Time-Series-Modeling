@@ -35,6 +35,8 @@
 #   baseline_bilstm       — Bidirectional LSTM
 #   baseline_mahadevan2021 — classical: RandomForest + 36 hand-crafted features
 #   baseline_ji2023       — classical: LightGBM + 36 hand-crafted features (TDA/DL omitted)
+#   baseline_mdpi2024_fe  — Xing 2024 FE: tsfresh + sklearn GradientBoosting
+#   baseline_mdpi2024_cnn — Xing 2024 DL: ConvNormPool 1D CNN
 #
 # Extra CLI args after the variant are forwarded to the training script, e.g.:
 #   bash run_ablation.sh no_mamba --num_gpu 2
@@ -71,6 +73,8 @@ VALID_VARIANTS=(
     baseline_bilstm
     baseline_mahadevan2021
     baseline_ji2023
+    baseline_mdpi2024_fe
+    baseline_mdpi2024_cnn
 )
 
 if [[ $# -lt 1 ]]; then
@@ -110,7 +114,7 @@ echo "=============================================="
 
 # Classical ML baselines use a different runner.
 case "${VARIANT}" in
-    baseline_mahadevan2021|baseline_ji2023)
+    baseline_mahadevan2021|baseline_ji2023|baseline_mdpi2024_fe)
         RUNNER="${ROOT_DIR}/training/train_classical.py"
         ;;
     *)

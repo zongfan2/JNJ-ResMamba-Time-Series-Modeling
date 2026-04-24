@@ -1,0 +1,56 @@
+# =============================================================================
+# Baseline — Xing et al. 2024 (MDPI Sensors 24(11):3364), deep-learning arm
+# =============================================================================
+# ConvNormPool 1D CNN on raw accelerometer windows.  Paper uses 3 stacked
+# ConvNormPool modules (Conv1d → BN → Swish → MaxPool) with hidden=128 and
+# kernel=5, followed by GlobalAvgPool and 2 FC layers; Focal loss; Adam
+# lr=1e-3, weight decay 1e-3; StepLR(step=10, gamma=0.1); 200 epochs, batch 16;
+# 1:1 class-balanced sampling during training.  Reference:
+#   https://www.mdpi.com/1424-8220/24/11/3364
+#
+# Runs via training/train_scratch.py (standard DL path).  LOSO cross-validation.
+#
+# Usage:
+#   bash experiments/run_ablation.sh baseline_mdpi2024_cnn
+
+experiment:
+  name: baseline_mdpi2024_cnn
+  description: "Xing 2024 DL — ConvNormPool 1D CNN."
+  task: scratch_detection
+  date: "2026-04-24"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+model:
+  architecture: mdpi2024_cnn
+  overrides:
+    hidden_size: 128
+    kernel_size: 5
+    pool_size: 2
+    num_blocks: 3
+    fc_dim: 128
+    dropout: 0.0
+    average_mask: false
+    supcon_loss: false
+
+training:
+  output: baseline-mdpi2024_cnn-bs32-loso
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOSO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

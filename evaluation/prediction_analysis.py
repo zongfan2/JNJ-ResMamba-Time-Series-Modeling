@@ -880,6 +880,8 @@ ABLATION_VARIANTS = {
     # 'BiLSTM':                   'baseline-bilstm-bs32-loso',
     # 'Mahadevan2021 (XGB)':      'baseline-mahadevan2021-loso',
     # 'Ji2023 (pragmatic)':       'baseline-ji2023-loso',
+    # 'Xing2024 (FE)':            'baseline-mdpi2024_fe-loso',
+    # 'Xing2024 (CNN)':           'baseline-mdpi2024_cnn-bs32-loso',
 }
 
 

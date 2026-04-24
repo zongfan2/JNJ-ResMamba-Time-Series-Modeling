@@ -1,0 +1,53 @@
+# =============================================================================
+# Baseline — Xing et al. 2024 (MDPI Sensors 24(11):3364), feature-engineering arm
+# =============================================================================
+# tsfresh ComprehensiveFCParameters (~2350 features) + FFT peaks on x/y/z,
+# z-scored, then a sklearn GradientBoostingClassifier.  Duration predicted
+# with sklearn GradientBoostingRegressor on the same features (hurdle gate
+# applied downstream in evaluation/prediction_analysis.py).  Reference:
+#   https://www.mdpi.com/1424-8220/24/11/3364
+#
+# Runs via training/train_classical.py.  LOSO cross-validation.
+#
+# Usage:
+#   python3.11 training/train_classical.py \
+#     --config experiments/configs/ablation/ablation_baseline_mdpi2024_fe.yaml
+
+experiment:
+  name: baseline_mdpi2024_fe
+  description: "Xing 2024 FE — tsfresh + sklearn GradientBoosting."
+  task: scratch_detection
+  date: "2026-04-24"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: ""
+
+model:
+  architecture: mdpi2024_fe
+  overrides:
+    feature_set: tsfresh        # triggers tsfresh extractor in train_classical.py
+    standardize_features: true  # paper normalises features (z-score)
+    # GradientBoostingClassifier hyperparameters
+    n_estimators: 200
+    learning_rate: 0.05
+    max_depth: 3
+    subsample: 1.0
+    random_state: 42
+    # tsfresh: 0 = single-process (usually fastest for short segments)
+    tsfresh_n_jobs: 0
+    # Duration regression — zero-inflated target: train on positives only
+    # and let prediction_analysis apply the hard pr1==0 → pr3=0 gate.
+    reg_hurdle: true
+    reg_log_target: true
+
+training:
+  output: baseline-mdpi2024_fe-loso
+  execution_mode: train
+  testing: LOSO
+  num_gpu: 0
+
+reproducibility:
+  random_seed: 42
+  numpy_seed: 42

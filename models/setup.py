@@ -37,6 +37,7 @@ from .resnet import ResNet1D, ResBlock1D, BasicBlock1D, Bottleneck1D
 from .unet import EfficientUNet, ResNetUNet, ResNetMambaUNet, EncoderStage, DecoderBlock, OutModule2
 from .specialized import PatchTSTHead, PatchTSTNS, PredictHead, GASFFeatureExtractor, ViT, SwinT, PatchEmbedding
 from .conv1d import Conv1DBlock, Conv1DTS
+from .mdpi2024_cnn import MDPI2024CNN, ConvNormPool
 
 try:
     from .vit1d import ViT1D
@@ -457,8 +458,10 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
             # load_weights = best_params.get("load_weights", False)
             average_mask = best_params.get("average_mask", False)
             supcon_loss = best_params.get("supcon_loss", False)
+            use_embedding = best_params.get("use_embedding", True)
+            pos_learnable = best_params.get("pos_learnable", True)
 
-            model = ViT1D(time_length=prediction_length, 
+            model = ViT1D(time_length=prediction_length,
                           patch_size=patch_size,
                           stride=stride,
                           in_channels=input_dim,
@@ -472,7 +475,8 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                           padding_threshold=padding_threshold,
                           average_mask=average_mask,
                           supcon_loss=supcon_loss,
-                          use_embedding=True
+                          use_embedding=use_embedding,
+                          pos_learnable=pos_learnable,
                           )
         case "bilstm":
             hidden_size = best_params.get("hidden_size", 256)
@@ -503,6 +507,21 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                 dropout=0.1,
                 second_level_mask=second_level_mask,
                 supcon_loss=supcon_loss
+            )
+
+        case "mdpi2024_cnn":
+            # Xing et al. 2024 (MDPI Sensors 24(11):3364) ConvNormPool CNN.
+            model = MDPI2024CNN(
+                time_length=max_seq_len,
+                in_channels=input_tensor_size,
+                hidden_size=best_params.get("hidden_size", 128),
+                kernel_size=best_params.get("kernel_size", 5),
+                pool_size=best_params.get("pool_size", 2),
+                num_blocks=best_params.get("num_blocks", 3),
+                fc_dim=best_params.get("fc_dim", 128),
+                dropout=best_params.get("dropout", 0.0),
+                second_level_mask=best_params.get("average_mask", False),
+                supcon_loss=best_params.get("supcon_loss", False),
             )
         
         case "resnet18_1d":

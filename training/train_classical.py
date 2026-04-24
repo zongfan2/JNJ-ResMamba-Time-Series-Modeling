@@ -36,8 +36,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 _shell_script = '''
 cd munge/predictive_modeling 2>/dev/null || true
-sudo python3.11 -m pip install --quiet xgboost lightgbm 2>/dev/null || \
-python3.11 -m pip install --quiet xgboost lightgbm 2>/dev/null || true
+sudo python3.11 -m pip install --quiet xgboost lightgbm tsfresh 2>/dev/null || \
+python3.11 -m pip install --quiet xgboost lightgbm tsfresh 2>/dev/null || true
 '''
 try:
     subprocess.run(_shell_script, shell=True, capture_output=True, text=True, timeout=180)
@@ -152,6 +152,18 @@ def build_classifier(arch: str, overrides: dict):
             l2_regularization=float(overrides.get("reg_lambda", 0.0)),
             random_state=int(overrides.get("random_state", 42)),
         )
+    elif arch == "mdpi2024_fe":
+        # Xing et al. 2024 feature-engineering arm — sklearn GradientBoosting
+        # on ~2353 tsfresh features.  Paper uses the straight sklearn GBM
+        # (not XGBoost/LightGBM), so we match that.
+        from sklearn.ensemble import GradientBoostingClassifier
+        return GradientBoostingClassifier(
+            n_estimators=int(overrides.get("n_estimators", 200)),
+            learning_rate=float(overrides.get("learning_rate", 0.05)),
+            max_depth=int(overrides.get("max_depth", 3)),
+            subsample=float(overrides.get("subsample", 1.0)),
+            random_state=int(overrides.get("random_state", 42)),
+        )
     else:
         raise ValueError(f"Unknown classical baseline architecture: {arch}")
 
@@ -233,6 +245,15 @@ def build_regressor(arch: str, overrides: dict):
                 n_jobs=int(overrides.get("n_jobs", -1)),
                 verbose=-1,
             )
+    elif arch == "mdpi2024_fe":
+        # Xing et al. 2024 — sklearn GradientBoostingRegressor for duration.
+        from sklearn.ensemble import GradientBoostingRegressor
+        return GradientBoostingRegressor(
+            n_estimators=int(overrides.get("reg_n_estimators", overrides.get("n_estimators", 200))),
+            learning_rate=float(overrides.get("reg_learning_rate", overrides.get("learning_rate", 0.05))),
+            max_depth=int(overrides.get("reg_max_depth", overrides.get("max_depth", 3))),
+            random_state=int(overrides.get("random_state", 42)),
+        )
     else:
         raise ValueError(f"Unknown classical baseline architecture: {arch}")
     # Fallback: sklearn HistGradientBoostingRegressor
@@ -382,10 +403,26 @@ def run_cv(cfg: dict, args) -> None:
             continue
 
         # ---- Feature extraction ----
-        print(f"  extracting features on {df_train['segment'].nunique()} train segments ...")
-        X_tr, y_tr, dur_tr, seg_tr = extract_features_batch(df_train)
-        print(f"  extracting features on {df_test['segment'].nunique()} test  segments ...")
-        X_te, y_te, dur_te, seg_te = extract_features_batch(df_test)
+        feature_set = str(overrides.get("feature_set", "default")).lower()
+        if feature_set in ("tsfresh", "mdpi2024"):
+            from baselines_classical.tsfresh_features import extract_tsfresh_features_batch
+            print(f"  extracting tsfresh features on {df_train['segment'].nunique()} train segments ...")
+            X_tr, y_tr, dur_tr, seg_tr, tsf_names = extract_tsfresh_features_batch(
+                df_train,
+                n_jobs=int(overrides.get("tsfresh_n_jobs", 0)),
+            )
+            print(f"  extracting tsfresh features on {df_test['segment'].nunique()} test  segments ...")
+            X_te, y_te, dur_te, seg_te, _ = extract_tsfresh_features_batch(
+                df_test,
+                n_jobs=int(overrides.get("tsfresh_n_jobs", 0)),
+            )
+            feat_names_fold = tsf_names
+        else:
+            print(f"  extracting features on {df_train['segment'].nunique()} train segments ...")
+            X_tr, y_tr, dur_tr, seg_tr = extract_features_batch(df_train)
+            print(f"  extracting features on {df_test['segment'].nunique()} test  segments ...")
+            X_te, y_te, dur_te, seg_te = extract_features_batch(df_test)
+            feat_names_fold = feat_names
         if X_tr.size == 0 or X_te.size == 0:
             print("  [skip] empty feature matrix")
             continue
@@ -393,6 +430,14 @@ def run_cv(cfg: dict, args) -> None:
         # ---- Clean up NaNs (e.g. constant segments) ----
         X_tr = np.nan_to_num(X_tr, nan=0.0, posinf=0.0, neginf=0.0)
         X_te = np.nan_to_num(X_te, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # ---- Standardize features (Xing 2024 paper step; safe for others) ----
+        if bool(overrides.get("standardize_features", feature_set in ("tsfresh", "mdpi2024"))):
+            mu = X_tr.mean(axis=0, keepdims=True)
+            sd = X_tr.std(axis=0, keepdims=True)
+            sd = np.where(sd < 1e-8, 1.0, sd)
+            X_tr = ((X_tr - mu) / sd).astype(np.float32)
+            X_te = ((X_te - mu) / sd).astype(np.float32)
 
         # ---- Optional: DL-derived features (Paper 2) ----
         use_dl = bool(overrides.get("use_dl_features", False))
@@ -448,8 +493,8 @@ def run_cv(cfg: dict, args) -> None:
             keep = select_features_rfecv(X_tr, y_tr, target_n=target_n)
             X_tr = X_tr[:, keep]
             X_te = X_te[:, keep]
-            selected = [feat_names[i] for i in keep]
-            print(f"  selected {len(keep)} features: {selected}")
+            selected = [feat_names_fold[i] for i in keep]
+            print(f"  selected {len(keep)} features")
         else:
             keep = np.arange(X_tr.shape[1])
 

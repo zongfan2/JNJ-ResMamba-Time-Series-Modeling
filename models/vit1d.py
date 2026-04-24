@@ -334,6 +334,7 @@ class ViT1D(nn.Module):
         attention_type: str = 'standard',  # 'standard' or 'flash'
         average_mask: bool = False,    # whether to average overlapping mask predictions
         supcon_loss: bool = False, # use supervised contrastive loss or not
+        pos_learnable: bool = True,  # learnable vs fixed sinusoidal positional encoding
     ):
         super().__init__()
         
@@ -362,7 +363,7 @@ class ViT1D(nn.Module):
             padding_value=padding_value,
             padding_threshold=padding_threshold,
             use_embedding=use_embedding,
-            pos_learnable=True,
+            pos_learnable=pos_learnable,
             include_cls=True,  # Include CLS token
             dropout=dropout
         )

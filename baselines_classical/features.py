@@ -280,3 +280,29 @@ def extract_features_batch(
         np.asarray(dur_list, dtype=np.float32),
         np.asarray(seg_list, dtype=object),
     )
+
+
+def extract_features_from_windows(
+    X_win: np.ndarray,
+    fs: int = 20,
+    hpf: bool = True,
+) -> np.ndarray:
+    """Compute the 36 hand-crafted features per window.
+
+    Args:
+        X_win: [N, win_len, 3] raw signal tensor produced by
+               ``baselines_classical.windowing.make_windows``.
+        fs:   sampling rate.  Default 20 Hz.
+        hpf:  apply 0.25 Hz high-pass before deriving SVM/PC1/PC2.
+
+    Returns:
+        X: [N, 36] float32 feature matrix.  Row order matches ``X_win``.
+    """
+    if X_win.ndim != 3 or X_win.shape[2] != 3:
+        raise ValueError(f"X_win must be [N, L, 3]; got {X_win.shape}")
+    if X_win.shape[0] == 0:
+        return np.zeros((0, 36), dtype=np.float32)
+    feats = np.empty((X_win.shape[0], 36), dtype=np.float32)
+    for i in range(X_win.shape[0]):
+        feats[i] = extract_features(X_win[i], fs=fs, hpf=hpf)
+    return feats

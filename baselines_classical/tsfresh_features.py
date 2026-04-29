@@ -166,7 +166,16 @@ def extract_tsfresh_features_batch(
     long_df = pd.concat(long_parts, ignore_index=True)
     settings = SettingsCls()
     n_series = len(seg_list) * len(xyz_cols)
-    print(f"  [tsfresh] feature_set={feature_set_type} n_jobs={n_jobs} "
+    # tsfresh forwards n_jobs straight to multiprocessing.Pool, which rejects
+    # negatives. Translate sklearn-style n_jobs=-1 to all CPUs; keep 0 as-is
+    # (tsfresh treats 0 as "no multiprocessing", which is a valid mode).
+    if n_jobs is None or n_jobs < 0:
+        import os
+        resolved_n_jobs = os.cpu_count() or 1
+    else:
+        resolved_n_jobs = int(n_jobs)
+    print(f"  [tsfresh] feature_set={feature_set_type} n_jobs={n_jobs}"
+          f"{f' (resolved={resolved_n_jobs})' if resolved_n_jobs != n_jobs else ''} "
           f"n_series={n_series} (segments × axes) "
           f"rows={len(long_df):,}")
     ts_feat = tsfresh_extract(
@@ -175,7 +184,7 @@ def extract_tsfresh_features_batch(
         column_sort="time",
         column_value="value",
         default_fc_parameters=settings,
-        n_jobs=n_jobs,
+        n_jobs=resolved_n_jobs,
         disable_progressbar=disable_progressbar,
     )
     # ts_feat index is {seg}__{axis}.  Pivot back to one row per segment by
@@ -217,3 +226,117 @@ def extract_tsfresh_features_batch(
         np.asarray(seg_list, dtype=object),
         list(X_df.columns),
     )
+
+
+# ---------------------------------------------------------------------------
+# Window-level extractor — Xing 2024 windowing protocol
+# ---------------------------------------------------------------------------
+
+
+def extract_tsfresh_features_from_windows(
+    X_win: np.ndarray,
+    fs: int = 20,
+    n_jobs: int = -1,
+    disable_progressbar: bool = False,
+    feature_set_type: str = "comprehensive",
+) -> tuple[np.ndarray, list[str]]:
+    """tsfresh feature extraction on a stack of fixed-length 3-s windows.
+
+    Mirrors :func:`extract_tsfresh_features_batch` but takes pre-tiled
+    window tensors (shape ``[N_windows, win_len, 3]``) instead of a
+    bout-level DataFrame.  Each row of the returned matrix is a single
+    3-s window, matching the protocol of Xing 2024 (window=3 s,
+    ComprehensiveFCParameters across x/y/z + FFT peaks per axis).
+
+    Args:
+        X_win: [N, win_len, 3] float window tensor (raw accelerometer).
+        fs:    sampling rate, only used for FFT peak features.
+        n_jobs / disable_progressbar / feature_set_type: as in the
+                bout-level extractor.
+
+    Returns:
+        X:     [N, F] feature matrix aligned 1:1 with ``X_win``.
+        feature_names: list[str] of length F.
+    """
+    tsfresh_extract, settings_map = _try_import_tsfresh()
+    if tsfresh_extract is None:
+        raise ImportError(
+            "mdpi2024_fe baseline requires tsfresh. Install via `pip install tsfresh`."
+        )
+    if feature_set_type not in settings_map:
+        raise ValueError(
+            f"feature_set_type must be one of {list(settings_map)}, got {feature_set_type!r}"
+        )
+    SettingsCls = settings_map[feature_set_type]
+
+    if X_win.ndim != 3 or X_win.shape[2] != 3:
+        raise ValueError(f"X_win must be [N, L, 3]; got {X_win.shape}")
+    n_windows, win_len, _ = X_win.shape
+    if n_windows == 0:
+        return np.zeros((0, 0), dtype=np.float32), []
+
+    axes = ("x", "y", "z")
+    # Long-format frame for tsfresh: id = "{win_idx}__{axis}".
+    n_rows = n_windows * 3 * win_len
+    ids = np.empty(n_rows, dtype=object)
+    times = np.empty(n_rows, dtype=np.int32)
+    values = np.empty(n_rows, dtype=np.float32)
+    pos = 0
+    win_ids: list[str] = []
+    for i in range(n_windows):
+        win_id = f"w{i}"
+        win_ids.append(win_id)
+        for a, axis in enumerate(axes):
+            for t in range(win_len):
+                ids[pos] = f"{win_id}__{axis}"
+                times[pos] = t
+                values[pos] = float(X_win[i, t, a])
+                pos += 1
+    long_df = pd.DataFrame({"id": ids, "time": times, "value": values})
+
+    settings = SettingsCls()
+    if n_jobs is None or n_jobs < 0:
+        import os
+        resolved_n_jobs = os.cpu_count() or 1
+    else:
+        resolved_n_jobs = int(n_jobs)
+    n_series = n_windows * len(axes)
+    print(f"  [tsfresh/window] feature_set={feature_set_type} n_jobs={n_jobs}"
+          f"{f' (resolved={resolved_n_jobs})' if resolved_n_jobs != n_jobs else ''} "
+          f"n_series={n_series} (windows × axes) "
+          f"rows={len(long_df):,}")
+    ts_feat = tsfresh_extract(
+        long_df,
+        column_id="id",
+        column_sort="time",
+        column_value="value",
+        default_fc_parameters=settings,
+        n_jobs=resolved_n_jobs,
+        disable_progressbar=disable_progressbar,
+    )
+
+    ts_feat.index = ts_feat.index.astype(str)
+    idx_parts = ts_feat.index.str.rsplit("__", n=1, expand=True)
+    ts_feat["__win__"] = idx_parts[0]
+    ts_feat["__axis__"] = idx_parts[1]
+    wide = ts_feat.pivot(index="__win__", columns="__axis__")
+    wide.columns = [f"{col}_{axis}" for col, axis in wide.columns]
+    wide = wide.reindex(win_ids)
+
+    # Per-axis FFT peak features (paper: tsfresh + FFT).
+    fft_rows = []
+    for i, win_id in enumerate(win_ids):
+        row = {"__win__": win_id}
+        for a, axis in enumerate(axes):
+            stats = _fft_magnitude_stats(X_win[i, :, a].astype(np.float32))
+            for k, v in stats.items():
+                row[f"{k}_{axis}"] = v
+        fft_rows.append(row)
+    fft_df = pd.DataFrame(fft_rows).set_index("__win__").reindex(win_ids)
+
+    X_df = pd.concat([wide, fft_df], axis=1)
+    X_df = X_df.replace([np.inf, -np.inf], np.nan)
+    medians = X_df.median(axis=0, skipna=True)
+    X_df = X_df.fillna(medians).fillna(0.0)
+    X = X_df.to_numpy(dtype=np.float32)
+    return X, list(X_df.columns)

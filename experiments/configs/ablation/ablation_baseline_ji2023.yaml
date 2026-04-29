@@ -65,6 +65,21 @@ training:
   testing: LOSO
   num_gpu: 0
 
+# Paper-faithful 3-s sliding-window protocol.
+# Ji 2023 §Feature engineering: 3-s windows with 1.5-s overlap for training,
+# non-overlapping 3-s windows at deployment; window labelled positive when
+# >1 s of frame-level scratch falls inside it; hourly scratch duration =
+# average per-window scratch seconds within each hour (count rule).
+windowing:
+  enabled: true
+  fs_hz: 20
+  win_seconds: 3.0
+  train_stride_seconds: 1.5
+  infer_stride_seconds: 3.0
+  label_min_scratch_seconds: 1.0
+  duration_estimator: count
+  min_pos_windows: 1
+
 reproducibility:
   random_seed: 42
   numpy_seed: 42

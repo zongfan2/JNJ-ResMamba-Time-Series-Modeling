@@ -59,8 +59,13 @@ from utils.common import create_folder  # noqa: E402
 
 from baselines_classical.features import (  # noqa: E402
     extract_features_batch,
+    extract_features_from_windows,
     extract_raw_segments_batch,
     feature_names,
+)
+from baselines_classical.windowing import (  # noqa: E402
+    aggregate_window_predictions_to_bout,
+    make_windows,
 )
 
 
@@ -370,6 +375,26 @@ def run_cv(cfg: dict, args) -> None:
         raise ValueError(f"training.testing must be LOFO or LOSO (got {testing!r})")
     group_col = "FOLD" if testing == "LOFO" else "PID"
 
+    # ---- Windowing config (Mahadevan 2021 / Ji 2023 / Xing 2024 protocol) ----
+    # When enabled, each motion bout is sliced into 3-s windows: 1.5-s stride
+    # for training (50% overlap, paper-faithful "to maximise data availability"),
+    # 3.0-s stride for inference (non-overlap, so total scratch duration in a
+    # bout = win_seconds × n_pos_windows).  Per-window predictions are
+    # aggregated back to bout level for the existing per-frame CSV contract.
+    windowing_cfg = cfg.get("windowing", {}) or {}
+    is_windowed = bool(windowing_cfg.get("enabled", False))
+    fs_hz = int(windowing_cfg.get("fs_hz", 20))  # dataset is 20 Hz
+    win_seconds = float(windowing_cfg.get("win_seconds", 3.0))
+    train_stride_seconds = float(windowing_cfg.get("train_stride_seconds", 1.5))
+    infer_stride_seconds = float(windowing_cfg.get("infer_stride_seconds", 3.0))
+    label_min_scratch_seconds = float(windowing_cfg.get("label_min_scratch_seconds", 1.0))
+    duration_estimator = str(windowing_cfg.get("duration_estimator", "count")).lower()
+    if duration_estimator not in ("count", "regressor"):
+        raise ValueError(
+            f"windowing.duration_estimator must be 'count' or 'regressor' (got {duration_estimator!r})"
+        )
+    min_pos_windows = int(windowing_cfg.get("min_pos_windows", 1))
+
     # ---- Output layout mirrors train_scratch.py ----
     dataset_name = os.path.basename(input_folder.rstrip("/raw"))
     results_folder = Path(
@@ -406,33 +431,78 @@ def run_cv(cfg: dict, args) -> None:
             continue
 
         # ---- Feature extraction ----
+        # When windowing is enabled, X_tr/X_te rows are 3-s windows and
+        # seg_tr/seg_te are the *bout* id each window came from (used for
+        # aggregation back to bout level after prediction).  When disabled,
+        # rows are bouts and seg_tr/seg_te are bout ids one-to-one.
         feature_set = str(overrides.get("feature_set", "default")).lower()
-        if feature_set in ("tsfresh", "mdpi2024"):
-            from baselines_classical.tsfresh_features import extract_tsfresh_features_batch
-            ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))  # -1 = all CPUs
-            ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
-            ts_progress = bool(overrides.get("tsfresh_progress", True))
-            print(f"  extracting tsfresh features on {df_train['segment'].nunique()} train segments ...")
-            X_tr, y_tr, dur_tr, seg_tr, tsf_names = extract_tsfresh_features_batch(
-                df_train,
-                n_jobs=ts_jobs,
-                feature_set_type=ts_set,
-                disable_progressbar=not ts_progress,
+        if is_windowed:
+            print(f"  windowing: win={win_seconds}s, train_stride={train_stride_seconds}s, "
+                  f"infer_stride={infer_stride_seconds}s, label_rule>{label_min_scratch_seconds}s")
+            Xw_tr, y_tr, dur_tr, seg_tr, _, _ = make_windows(
+                df_train, fs=fs_hz, win_seconds=win_seconds,
+                stride_seconds=train_stride_seconds,
+                label_min_scratch_seconds=label_min_scratch_seconds,
             )
-            print(f"  extracting tsfresh features on {df_test['segment'].nunique()} test  segments ...")
-            X_te, y_te, dur_te, seg_te, _ = extract_tsfresh_features_batch(
-                df_test,
-                n_jobs=ts_jobs,
-                feature_set_type=ts_set,
-                disable_progressbar=not ts_progress,
+            Xw_te, y_te, dur_te, seg_te, _, _ = make_windows(
+                df_test, fs=fs_hz, win_seconds=win_seconds,
+                stride_seconds=infer_stride_seconds,
+                label_min_scratch_seconds=label_min_scratch_seconds,
             )
-            feat_names_fold = tsf_names
+            print(f"  produced {len(Xw_tr)} train windows from {df_train['segment'].nunique()} bouts; "
+                  f"{len(Xw_te)} test windows from {df_test['segment'].nunique()} bouts  "
+                  f"(pos_rate train={float(y_tr.mean()) if len(y_tr) else 0.0:.3f} "
+                  f"test={float(y_te.mean()) if len(y_te) else 0.0:.3f})")
+            if feature_set in ("tsfresh", "mdpi2024"):
+                from baselines_classical.tsfresh_features import (  # noqa: E402
+                    extract_tsfresh_features_from_windows,
+                )
+                ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))
+                ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
+                ts_progress = bool(overrides.get("tsfresh_progress", True))
+                X_tr, tsf_names = extract_tsfresh_features_from_windows(
+                    Xw_tr, fs=fs_hz, n_jobs=ts_jobs, feature_set_type=ts_set,
+                    disable_progressbar=not ts_progress,
+                )
+                X_te, _ = extract_tsfresh_features_from_windows(
+                    Xw_te, fs=fs_hz, n_jobs=ts_jobs, feature_set_type=ts_set,
+                    disable_progressbar=not ts_progress,
+                )
+                feat_names_fold = tsf_names
+            else:
+                X_tr = extract_features_from_windows(Xw_tr, fs=fs_hz, hpf=True)
+                X_te = extract_features_from_windows(Xw_te, fs=fs_hz, hpf=True)
+                feat_names_fold = feature_names()
+            # Stash the raw window tensors for the optional DL-feature path.
+            Xw_tr_raw, Xw_te_raw = Xw_tr, Xw_te
         else:
-            print(f"  extracting features on {df_train['segment'].nunique()} train segments ...")
-            X_tr, y_tr, dur_tr, seg_tr = extract_features_batch(df_train)
-            print(f"  extracting features on {df_test['segment'].nunique()} test  segments ...")
-            X_te, y_te, dur_te, seg_te = extract_features_batch(df_test)
-            feat_names_fold = feat_names
+            if feature_set in ("tsfresh", "mdpi2024"):
+                from baselines_classical.tsfresh_features import extract_tsfresh_features_batch
+                ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))  # -1 = all CPUs
+                ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
+                ts_progress = bool(overrides.get("tsfresh_progress", True))
+                print(f"  extracting tsfresh features on {df_train['segment'].nunique()} train segments ...")
+                X_tr, y_tr, dur_tr, seg_tr, tsf_names = extract_tsfresh_features_batch(
+                    df_train,
+                    n_jobs=ts_jobs,
+                    feature_set_type=ts_set,
+                    disable_progressbar=not ts_progress,
+                )
+                print(f"  extracting tsfresh features on {df_test['segment'].nunique()} test  segments ...")
+                X_te, y_te, dur_te, seg_te, _ = extract_tsfresh_features_batch(
+                    df_test,
+                    n_jobs=ts_jobs,
+                    feature_set_type=ts_set,
+                    disable_progressbar=not ts_progress,
+                )
+                feat_names_fold = tsf_names
+            else:
+                print(f"  extracting features on {df_train['segment'].nunique()} train segments ...")
+                X_tr, y_tr, dur_tr, seg_tr = extract_features_batch(df_train)
+                print(f"  extracting features on {df_test['segment'].nunique()} test  segments ...")
+                X_te, y_te, dur_te, seg_te = extract_features_batch(df_test)
+                feat_names_fold = feat_names
+            Xw_tr_raw, Xw_te_raw = None, None
         if X_tr.size == 0 or X_te.size == 0:
             print("  [skip] empty feature matrix")
             continue
@@ -458,14 +528,25 @@ def run_cv(cfg: dict, args) -> None:
                 dl_device = "cuda" if _torch.cuda.is_available() else "cpu"
             except ImportError:
                 dl_device = "cpu"
-            dl_max_len = int(overrides.get("dl_max_len", 1200))
             dl_epochs = int(overrides.get("dl_epochs", 30))
             dl_bs = int(overrides.get("dl_batch_size", 128))
             dl_lr = float(overrides.get("dl_learning_rate", 1e-3))
             oof_folds = int(overrides.get("dl_oof_folds", 5))
-            print(f"  [dl] extracting raw segments (max_len={dl_max_len}) for DL features on {dl_device} ...")
-            raw_tr, raw_seg_tr = extract_raw_segments_batch(df_train, max_len=dl_max_len)
-            raw_te, raw_seg_te = extract_raw_segments_batch(df_test,  max_len=dl_max_len)
+            if is_windowed:
+                # Windowed flow: each X_tr/X_te row is already a 3-s window.
+                # Reuse the raw window tensors built during feature extraction;
+                # SmallCNN / SmallBiLSTM operate on any [N, T, 3] shape.
+                print(f"  [dl] reusing {len(Xw_tr_raw)} window tensors "
+                      f"(win_len={Xw_tr_raw.shape[1]}) for DL features on {dl_device} ...")
+                raw_tr = Xw_tr_raw
+                raw_te = Xw_te_raw
+                raw_seg_tr = seg_tr
+                raw_seg_te = seg_te
+            else:
+                dl_max_len = int(overrides.get("dl_max_len", 1200))
+                print(f"  [dl] extracting raw segments (max_len={dl_max_len}) for DL features on {dl_device} ...")
+                raw_tr, raw_seg_tr = extract_raw_segments_batch(df_train, max_len=dl_max_len)
+                raw_te, raw_seg_te = extract_raw_segments_batch(df_test,  max_len=dl_max_len)
             # Realign raw tensors to the feature-batch segment order (defensive).
             if not np.array_equal(raw_seg_tr, seg_tr):
                 order = pd.Series(np.arange(len(raw_seg_tr)), index=raw_seg_tr).reindex(seg_tr).values
@@ -524,33 +605,39 @@ def run_cv(cfg: dict, args) -> None:
         clf.fit(X_tr, y_tr, **clf_fit_kwargs)
 
         # ---- Fit duration regressor (two-stage hurdle model) ----
-        # `scratch_duration` is zero-inflated: every non-scratch segment is
-        # exactly 0, a smaller positive tail for scratch segments.  A naive
-        # regressor trained on all segments predicts ≈ 0 (matches the mode),
-        # giving R^2 ≈ 0.  Train the regressor ONLY on positive segments —
-        # it now learns E[duration | scratch=1], which has a well-behaved
-        # non-degenerate distribution — and gate its output by the
-        # classifier's probability:  pr3 = p_scratch * E[duration | scratch].
-        # Optional log1p transform further symmetrises the positive tail.
+        # Bout-level flow: `scratch_duration` is zero-inflated (every
+        # non-scratch bout is exactly 0, smaller positive tail otherwise).
+        # A naive regressor on all bouts predicts ≈0, giving R²≈0.  Train
+        # ONLY on positive bouts — learns E[duration | scratch=1] — and
+        # let evaluation/prediction_analysis.py apply the hard pr1==0 gate.
+        # Windowed flow: dur_tr is per-window scratch seconds (0..win_seconds);
+        # the regressor only matters when duration_estimator='regressor'
+        # (Mahadevan / Ji default to 'count' = win_seconds × n_pos_windows).
         hurdle = bool(overrides.get("reg_hurdle", True))
         log_target = bool(overrides.get("reg_log_target", True))
+        train_regressor = (not is_windowed) or (duration_estimator == "regressor")
 
-        reg = build_regressor(arch, overrides)
-        if hurdle and (y_tr == 1).any():
-            pos_mask = (y_tr == 1)
-            X_reg = X_tr[pos_mask]
-            y_reg = dur_tr[pos_mask].astype(np.float32)
-            n_reg = int(pos_mask.sum())
-            print(f"  fitting {type(reg).__name__} (hurdle duration regressor) "
-                  f"on {n_reg} positive-only segments; log_target={log_target}")
+        if train_regressor:
+            reg = build_regressor(arch, overrides)
+            if hurdle and (y_tr == 1).any():
+                pos_mask = (y_tr == 1)
+                X_reg = X_tr[pos_mask]
+                y_reg = dur_tr[pos_mask].astype(np.float32)
+                n_reg = int(pos_mask.sum())
+                unit = "windows" if is_windowed else "bouts"
+                print(f"  fitting {type(reg).__name__} (hurdle duration regressor) "
+                      f"on {n_reg} positive-only {unit}; log_target={log_target}")
+            else:
+                X_reg = X_tr
+                y_reg = dur_tr.astype(np.float32)
+                print(f"  fitting {type(reg).__name__} (duration regressor) "
+                      f"on {len(y_reg)} rows (hurdle disabled)")
+            y_fit = np.log1p(y_reg) if log_target else y_reg
+            reg.fit(X_reg, y_fit)
         else:
-            X_reg = X_tr
-            y_reg = dur_tr.astype(np.float32)
-            print(f"  fitting {type(reg).__name__} (duration regressor) "
-                  f"on {len(y_reg)} segments (hurdle disabled)")
-
-        y_fit = np.log1p(y_reg) if log_target else y_reg
-        reg.fit(X_reg, y_fit)
+            reg = None
+            print(f"  skipping duration regressor (windowing duration_estimator='count'; "
+                  f"pr3 = {win_seconds} × n_pos_windows per bout)")
 
         # ---- Predict on held-out fold ----
         pr1 = clf.predict(X_te).astype(int)
@@ -559,21 +646,47 @@ def run_cv(cfg: dict, args) -> None:
         else:
             pr1_prob = pr1.astype(float)
 
-        reg_raw = reg.predict(X_te).astype(float)
-        if log_target:
-            reg_raw = np.expm1(reg_raw)
-        reg_raw = np.clip(reg_raw, 0.0, None)  # duration is non-negative
-        # NOTE: do NOT multiply by pr1_prob here.  evaluation/prediction_analysis.py
-        # applies a hard gate `dfp.loc[dfp.pr1 == 0, 'pr3'] = 0` during metric
-        # computation, so a soft probability gate here would double-attenuate
-        # (pr3 = p * reg * [pr1==1]) and systematically under-scale predictions
-        # for positive segments — directly hurting R^2.  Write the raw regressor
-        # output; prediction_analysis does the hurdle step during scoring.
-        pr3 = reg_raw
+        if reg is not None:
+            reg_raw = reg.predict(X_te).astype(float)
+            if log_target:
+                reg_raw = np.expm1(reg_raw)
+            reg_raw = np.clip(reg_raw, 0.0, None)  # duration is non-negative
+        else:
+            reg_raw = None
 
-        seg_to_pr1      = dict(zip(seg_te, pr1))
-        seg_to_pr1_prob = dict(zip(seg_te, pr1_prob))
-        seg_to_pr3      = dict(zip(seg_te, pr3))
+        # ---- Aggregate to bout level ----
+        # Bout-level flow:    rows are bouts → 1:1 mapping; pr3 = regressor output.
+        # Windowed flow:      rows are windows → group by bout id (seg_te) and
+        #                     apply Mahadevan/Ji aggregation rules, then convert
+        #                     paper-style seconds back into the bout-fraction
+        #                     unit our existing eval (gt3 = scratch_duration
+        #                     fraction) expects.
+        if is_windowed:
+            seg_to_pr1, seg_to_pr1_prob, seg_to_pr3_seconds = aggregate_window_predictions_to_bout(
+                seg_te, pr1, pr1_prob,
+                win_seconds=win_seconds,
+                duration_estimator=duration_estimator,
+                win_dur_pred=reg_raw,
+                min_pos_windows=min_pos_windows,
+            )
+            # Convert seconds → bout-fraction so it lines up with gt3 (which
+            # is sum(scratch frames)/count per bout, range [0, 1]).  Cap at 1.
+            bout_frame_count = df_test.groupby("segment", sort=False, observed=True).size().to_dict()
+            seg_to_pr3 = {
+                seg: float(min(1.0, secs / max(1e-6, bout_frame_count.get(seg, 1) / fs_hz)))
+                for seg, secs in seg_to_pr3_seconds.items()
+            }
+        else:
+            # NOTE: do NOT multiply by pr1_prob here.  evaluation/prediction_analysis.py
+            # applies a hard gate `dfp.loc[dfp.pr1 == 0, 'pr3'] = 0` during metric
+            # computation, so a soft probability gate here would double-attenuate
+            # (pr3 = p * reg * [pr1==1]) and systematically under-scale predictions
+            # for positive segments — directly hurting R^2.  Write the raw regressor
+            # output; prediction_analysis does the hurdle step during scoring.
+            pr3 = reg_raw
+            seg_to_pr1      = dict(zip(seg_te, pr1))
+            seg_to_pr1_prob = dict(zip(seg_te, pr1_prob))
+            seg_to_pr3      = dict(zip(seg_te, pr3))
 
         # ---- Build per-frame CSV ----
         out_df = _build_predictions_df(df_test, seg_to_pr1, seg_to_pr1_prob, seg_to_pr3)
@@ -582,22 +695,50 @@ def run_cv(cfg: dict, args) -> None:
 
         # ---- Persist models (small, cheap) ----
         joblib.dump(
-            {"clf": clf, "reg": reg, "feature_idx": keep, "feature_names": feat_names},
+            {
+                "clf": clf,
+                "reg": reg,
+                "feature_idx": keep,
+                "feature_names": feat_names,
+                "windowing": (
+                    {
+                        "win_seconds": win_seconds,
+                        "infer_stride_seconds": infer_stride_seconds,
+                        "label_min_scratch_seconds": label_min_scratch_seconds,
+                        "duration_estimator": duration_estimator,
+                        "min_pos_windows": min_pos_windows,
+                    }
+                    if is_windowed
+                    else None
+                ),
+            },
             models_folder / f"{arch}_test_subject_{fold}.joblib",
         )
 
-        # ---- Log a quick segment-level sanity metric (F1, AUROC, R^2) ----
+        # ---- Log sanity metrics ----
+        # Windowed runs report the paper's window-level F1/AUROC AND a bout-level
+        # R² in the same units as evaluation/prediction_analysis.py (fraction).
         try:
             from sklearn.metrics import f1_score, roc_auc_score, r2_score
             f1 = f1_score(y_te, pr1, zero_division=0)
             auc = roc_auc_score(y_te, pr1_prob) if len(set(y_te)) > 1 else float("nan")
-            r2 = r2_score(dur_te, pr3) if len(dur_te) > 1 and np.var(dur_te) > 0 else float("nan")
+            unit = "windows" if is_windowed else "segments"
+            if is_windowed:
+                # Bout-level R² — recompute gt and pred at the bout grain.
+                bout_grp = df_test.groupby("segment", sort=False, observed=True)
+                bout_dur_true = (bout_grp["scratch"].sum() / bout_grp.size()).to_dict()
+                bouts = list(bout_dur_true.keys())
+                gt3 = np.array([bout_dur_true[b] for b in bouts], dtype=np.float32)
+                pr3_arr = np.array([seg_to_pr3.get(b, 0.0) for b in bouts], dtype=np.float32)
+                r2 = r2_score(gt3, pr3_arr) if np.var(gt3) > 0 else float("nan")
+            else:
+                r2 = r2_score(dur_te, pr3) if len(dur_te) > 1 and np.var(dur_te) > 0 else float("nan")
             print(f"  test F1={f1*100:.2f}  AUROC={auc*100:.2f}  R2={r2:.3f}  "
-                  f"n_test_segments={len(y_te)}  pos_rate={y_te.mean():.3f}  "
+                  f"n_test_{unit}={len(y_te)}  pos_rate={y_te.mean():.3f}  "
                   f"elapsed={time.time()-t0:.1f}s")
             with open(logs_folder / f"sanity_{group_col}_{fold}.txt", "w") as fp:
                 fp.write(f"{group_col}={fold} F1={f1*100:.3f} AUROC={auc*100:.3f} "
-                         f"R2={r2:.3f} n_test_segments={len(y_te)}\n")
+                         f"R2={r2:.3f} n_test_{unit}={len(y_te)}\n")
         except Exception as exc:
             print(f"  [warn] sanity metric failed: {exc}")
 

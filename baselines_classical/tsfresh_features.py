@@ -74,6 +74,28 @@ def _try_import_tsfresh():
 # ---------------------------------------------------------------------------
 
 
+# Cap the auto-resolved worker count.  tsfresh forks workers via
+# `multiprocessing.Pool`, and on big Linux boxes (Domino's 100+ cores) every
+# fork dirties pages of the shared long_df (5–8 GB at typical scale), so the
+# working set explodes — we OOM'd a 224 GB machine with cpu_count() workers.
+# Cap at 8 by default; user can override via overrides.tsfresh_n_jobs in YAML.
+_TSFRESH_DEFAULT_MAX_WORKERS = 8
+
+
+def _resolve_tsfresh_n_jobs(n_jobs: int | None,
+                            max_workers: int = _TSFRESH_DEFAULT_MAX_WORKERS) -> int:
+    """Translate sklearn-style ``n_jobs`` into a tsfresh-safe integer.
+
+    - ``None`` or negative → ``min(cpu_count, max_workers)`` (auto, capped).
+    - ``0`` → 0 (tsfresh's "no multiprocessing" mode).
+    - positive → passed through as-is (user override; not capped).
+    """
+    if n_jobs is None or int(n_jobs) < 0:
+        import os
+        return min(os.cpu_count() or 1, max_workers)
+    return int(n_jobs)
+
+
 def _fft_magnitude_stats(seq: np.ndarray) -> dict:
     """Lightweight FFT features, named to avoid colliding with tsfresh output."""
     if seq.shape[0] < 4:
@@ -164,16 +186,13 @@ def extract_tsfresh_features_batch(
         )
 
     long_df = pd.concat(long_parts, ignore_index=True)
+    # Convert id to Categorical: per-row storage shrinks from ~80-byte Python
+    # strings to small int codes (10–50× memory savings on the long_df,
+    # critical when tsfresh forks N workers and each gets a copy).
+    long_df["id"] = long_df["id"].astype("category")
     settings = SettingsCls()
     n_series = len(seg_list) * len(xyz_cols)
-    # tsfresh forwards n_jobs straight to multiprocessing.Pool, which rejects
-    # negatives. Translate sklearn-style n_jobs=-1 to all CPUs; keep 0 as-is
-    # (tsfresh treats 0 as "no multiprocessing", which is a valid mode).
-    if n_jobs is None or n_jobs < 0:
-        import os
-        resolved_n_jobs = os.cpu_count() or 1
-    else:
-        resolved_n_jobs = int(n_jobs)
+    resolved_n_jobs = _resolve_tsfresh_n_jobs(n_jobs)
     print(f"  [tsfresh] feature_set={feature_set_type} n_jobs={n_jobs}"
           f"{f' (resolved={resolved_n_jobs})' if resolved_n_jobs != n_jobs else ''} "
           f"n_series={n_series} (segments × axes) "
@@ -276,31 +295,26 @@ def extract_tsfresh_features_from_windows(
         return np.zeros((0, 0), dtype=np.float32), []
 
     axes = ("x", "y", "z")
-    # Long-format frame for tsfresh: id = "{win_idx}__{axis}".
-    n_rows = n_windows * 3 * win_len
-    ids = np.empty(n_rows, dtype=object)
-    times = np.empty(n_rows, dtype=np.int32)
-    values = np.empty(n_rows, dtype=np.float32)
-    pos = 0
-    win_ids: list[str] = []
-    for i in range(n_windows):
-        win_id = f"w{i}"
-        win_ids.append(win_id)
-        for a, axis in enumerate(axes):
-            for t in range(win_len):
-                ids[pos] = f"{win_id}__{axis}"
-                times[pos] = t
-                values[pos] = float(X_win[i, t, a])
-                pos += 1
-    long_df = pd.DataFrame({"id": ids, "time": times, "value": values})
+    n_axes = len(axes)
+    # Build the long-format frame in vectorised numpy / pandas, NOT a Python
+    # triple-loop.  At 350 K windows × 3 axes × 60 samples that's 63 M rows;
+    # an `f"w{i}__{axis}"` per row would cost ~5 GB of Python str objects
+    # alone and OOM on multi-fold LOSO.  Instead we encode (window, axis) as
+    # an integer "series id" and let pandas Categorical hold the mapping.
+    series_codes = np.repeat(np.arange(n_windows * n_axes, dtype=np.int64), win_len)
+    time_idx = np.tile(np.arange(win_len, dtype=np.int32), n_windows * n_axes)
+    # X_win[i, t, a] → flatten in (i, a, t) order so it lines up with the
+    # series_codes layout (consecutive (window, axis) pairs).
+    values = np.ascontiguousarray(X_win.transpose(0, 2, 1)).reshape(-1).astype(np.float32, copy=False)
+    # Build the category labels lazily (only n_windows * n_axes strings, not n_rows).
+    win_ids = [f"w{i}" for i in range(n_windows)]
+    series_labels = [f"{win_ids[i]}__{axes[a]}" for i in range(n_windows) for a in range(n_axes)]
+    id_cat = pd.Categorical.from_codes(series_codes, categories=series_labels)
+    long_df = pd.DataFrame({"id": id_cat, "time": time_idx, "value": values})
 
     settings = SettingsCls()
-    if n_jobs is None or n_jobs < 0:
-        import os
-        resolved_n_jobs = os.cpu_count() or 1
-    else:
-        resolved_n_jobs = int(n_jobs)
-    n_series = n_windows * len(axes)
+    resolved_n_jobs = _resolve_tsfresh_n_jobs(n_jobs)
+    n_series = n_windows * n_axes
     print(f"  [tsfresh/window] feature_set={feature_set_type} n_jobs={n_jobs}"
           f"{f' (resolved={resolved_n_jobs})' if resolved_n_jobs != n_jobs else ''} "
           f"n_series={n_series} (windows × axes) "

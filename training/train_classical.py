@@ -439,6 +439,8 @@ def run_cv(cfg: dict, args) -> None:
         if is_windowed:
             print(f"  windowing: win={win_seconds}s, train_stride={train_stride_seconds}s, "
                   f"infer_stride={infer_stride_seconds}s, label_rule>{label_min_scratch_seconds}s")
+            n_train_bouts = df_train["segment"].nunique()
+            n_test_bouts = df_test["segment"].nunique()
             Xw_tr, y_tr, dur_tr, seg_tr, _, _ = make_windows(
                 df_train, fs=fs_hz, win_seconds=win_seconds,
                 stride_seconds=train_stride_seconds,
@@ -449,10 +451,21 @@ def run_cv(cfg: dict, args) -> None:
                 stride_seconds=infer_stride_seconds,
                 label_min_scratch_seconds=label_min_scratch_seconds,
             )
-            print(f"  produced {len(Xw_tr)} train windows from {df_train['segment'].nunique()} bouts; "
-                  f"{len(Xw_te)} test windows from {df_test['segment'].nunique()} bouts  "
+            print(f"  produced {len(Xw_tr)} train windows from {n_train_bouts} bouts; "
+                  f"{len(Xw_te)} test windows from {n_test_bouts} bouts  "
                   f"(pos_rate train={float(y_tr.mean()) if len(y_tr) else 0.0:.3f} "
                   f"test={float(y_te.mean()) if len(y_te) else 0.0:.3f})")
+            # df_train is no longer needed past windowing — it can be 2+ GB on
+            # the LOSO train fold and stays alive through tsfresh otherwise,
+            # crowding out the worker COW pages on memory-tight hosts.  Stash
+            # the per-bout PID lookup first (used downstream by the DL-feature
+            # path for subject-grouped val splits / OOF stacking).
+            _pid_by_seg_windowed = (
+                df_train.groupby("segment", sort=False, observed=True)["PID"].first().to_dict()
+            )
+            del df_train
+            import gc
+            gc.collect()
             if feature_set in ("tsfresh", "mdpi2024"):
                 from baselines_classical.tsfresh_features import (  # noqa: E402
                     extract_tsfresh_features_from_windows,
@@ -460,13 +473,16 @@ def run_cv(cfg: dict, args) -> None:
                 ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))
                 ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
                 ts_progress = bool(overrides.get("tsfresh_progress", True))
+                ts_chunk = int(overrides.get("tsfresh_chunk_size", 50000))
                 X_tr, tsf_names = extract_tsfresh_features_from_windows(
                     Xw_tr, fs=fs_hz, n_jobs=ts_jobs, feature_set_type=ts_set,
                     disable_progressbar=not ts_progress,
+                    chunk_size=ts_chunk,
                 )
                 X_te, _ = extract_tsfresh_features_from_windows(
                     Xw_te, fs=fs_hz, n_jobs=ts_jobs, feature_set_type=ts_set,
                     disable_progressbar=not ts_progress,
+                    chunk_size=ts_chunk,
                 )
                 feat_names_fold = tsf_names
             else:
@@ -555,8 +571,12 @@ def run_cv(cfg: dict, args) -> None:
                 order = pd.Series(np.arange(len(raw_seg_te)), index=raw_seg_te).reindex(seg_te).values
                 raw_te = raw_te[order]
             # Subject ids per segment — required for subject-grouped DL val
-            # split and OOF-stacking (avoids within-subject leakage).
-            pid_by_seg = df_train.groupby("segment", sort=False, observed=True)["PID"].first().to_dict()
+            # split and OOF-stacking (avoids within-subject leakage).  Under
+            # windowing df_train was freed earlier; reuse the stashed lookup.
+            if is_windowed:
+                pid_by_seg = _pid_by_seg_windowed
+            else:
+                pid_by_seg = df_train.groupby("segment", sort=False, observed=True)["PID"].first().to_dict()
             groups_tr = np.asarray([pid_by_seg.get(s) for s in seg_tr])
             print(f"  [dl] subject-grouped val split: {len(np.unique(groups_tr))} unique PIDs; "
                   f"oof_folds={oof_folds if oof_folds >= 2 else 0}")

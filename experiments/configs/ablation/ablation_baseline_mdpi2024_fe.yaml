@@ -35,12 +35,16 @@ model:
     max_depth: 3
     subsample: 1.0
     random_state: 42
-    # tsfresh knobs — LOSO pools are large; multiprocessing forks copy the
-    # ~5–8 GB long_df, so we cap workers to keep peak RSS bounded.
+    # tsfresh knobs.  The windowed path processes per-axis × per-chunk and
+    # writes directly into a preallocated float32 output array, so peak RSS
+    # is bounded by the chunk's tsfresh output.  Tune `tsfresh_chunk_size`
+    # down on memory-tight hosts (e.g. 20000 on a 40 GB box for ~80 K-window
+    # train folds; 50000 default).
     # feature set options: comprehensive (paper, slowest) | efficient (~3x faster) | minimal
-    tsfresh_n_jobs: -1          # -1 = auto (capped at 8 workers); 0 = serial; positive = exact
+    tsfresh_n_jobs: -1            # -1 = auto (capped at 4 workers); 0 = serial; positive = exact
     tsfresh_feature_set: comprehensive
     tsfresh_progress: true
+    tsfresh_chunk_size: 50000     # windows per tsfresh call; lower = lower peak RSS, higher = less startup overhead
     # Duration regression — zero-inflated target: train on positives only
     # and let prediction_analysis apply the hard pr1==0 → pr3=0 gate.
     reg_hurdle: true

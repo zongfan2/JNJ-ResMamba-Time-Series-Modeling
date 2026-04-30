@@ -260,6 +260,7 @@ def extract_tsfresh_features_from_windows(
     n_jobs: int = -1,
     disable_progressbar: bool = False,
     feature_set_type: str = "comprehensive",
+    chunk_size: int = 50000,
 ) -> tuple[np.ndarray, list[str]]:
     """tsfresh feature extraction on a stack of fixed-length 3-s windows.
 
@@ -296,98 +297,134 @@ def extract_tsfresh_features_from_windows(
     if n_windows == 0:
         return np.zeros((0, 0), dtype=np.float32), []
 
+    import gc
     axes = ("x", "y", "z")
     settings = SettingsCls()
     resolved_n_jobs = _resolve_tsfresh_n_jobs(n_jobs)
 
-    # PER-AXIS extraction.  The single-pass approach (one long_df with
-    # 1.5 M (window × axis) series) forces a final `pivot` from
-    # (n_series, n_features) to (n_windows, n_features × n_axes), and
-    # pandas pivot transiently allocates 3–5× the data size — at LOSO
-    # scale that means 30–50 GB even with a float32 final output, which
-    # is what was OOM-ing the 224 GB box.  Running tsfresh once per axis
-    # leaves us in window-major order from the start, so no pivot is
-    # needed; we just rename columns to "{feat}_{axis}" and concatenate
-    # along the column dimension.  Per-axis peak ~ tsfresh output
-    # (n_windows × n_features × 4 bytes float32) plus the per-axis
-    # long_df (n_windows × win_len × 12 bytes).
+    # CHUNKED + PER-AXIS + PREALLOCATED extraction.
+    #
+    # On a 40 GB host, even per-axis-without-pivot was tight: each axis
+    # built a (n_windows, ~794) float32 frame (~1.5 GB at LOSO scale), and
+    # accumulating 3 of them plus the concat transient + the still-alive
+    # df_train (~2 GB) + worker COW pages tipped past 40 GB.
+    #
+    # Strategy:
+    #   1.  Preallocate ONE float32 output array of final shape and write
+    #       chunks directly into the right rows/columns.  Never accumulate
+    #       per-axis DataFrames.
+    #   2.  Process each axis × chunk separately so peak transient
+    #       memory is bounded by (chunk_size × n_features × 4) + tsfresh's
+    #       per-worker working set.
+    #   3.  Collect FFT features in one vectorised numpy pass at the end
+    #       — they're tiny (9 columns total).
+    chunk_size = max(1, int(chunk_size))
+    n_chunks = (n_windows + chunk_size - 1) // chunk_size
     print(f"  [tsfresh/window] feature_set={feature_set_type} n_jobs={n_jobs}"
           f"{f' (resolved={resolved_n_jobs})' if resolved_n_jobs != n_jobs else ''} "
-          f"n_windows={n_windows:,} per_axis_rows={n_windows * win_len:,}")
-    win_ids = [f"w{i}" for i in range(n_windows)]
-    axis_frames: list[pd.DataFrame] = []
-    feature_names_first: list[str] | None = None
+          f"n_windows={n_windows:,} chunk_size={chunk_size:,} ({n_chunks} chunks/axis × {len(axes)} axes)")
+
+    feature_names_per_axis: list[str] | None = None
+    out_array: np.ndarray | None = None  # preallocated once we know n_features
+    n_feats_per_axis = 0
+
     for axis_idx, axis in enumerate(axes):
-        # Build a per-axis long_df with `n_windows` series of length win_len.
-        series_codes = np.repeat(np.arange(n_windows, dtype=np.int64), win_len)
-        time_idx = np.tile(np.arange(win_len, dtype=np.int32), n_windows)
-        # Contiguous slice along the axis dimension; flatten in (window, t) order.
-        values = np.ascontiguousarray(X_win[:, :, axis_idx]).reshape(-1).astype(np.float32, copy=False)
-        id_cat = pd.Categorical.from_codes(series_codes, categories=win_ids)
-        long_df = pd.DataFrame({"id": id_cat, "time": time_idx, "value": values})
-        del series_codes, time_idx, values
-        print(f"  [tsfresh/window] axis={axis} series={n_windows:,} rows={len(long_df):,}")
-        ts_feat = tsfresh_extract(
-            long_df,
-            column_id="id",
-            column_sort="time",
-            column_value="value",
-            default_fc_parameters=settings,
-            n_jobs=resolved_n_jobs,
-            disable_progressbar=disable_progressbar,
-        )
-        del long_df
-        # Cast immediately to float32 so we don't carry a 2× tax through the
-        # remaining 2 axes + concat.  Reorder rows to canonical win_ids order
-        # (tsfresh may reshuffle when categorical-coded).
-        ts_feat.index = ts_feat.index.astype(str)
-        ts_feat = ts_feat.reindex(win_ids)
-        ts_feat = ts_feat.astype(np.float32, copy=False)
-        ts_feat.columns = [f"{c}_{axis}" for c in ts_feat.columns]
-        if feature_names_first is None:
-            feature_names_first = list(ts_feat.columns)
-        axis_frames.append(ts_feat)
-        # Best-effort GC between axes — releases the parent's COW pages
-        # the workers dirtied so the next axis can fork cleanly.
-        import gc
-        gc.collect()
+        for ci, chunk_start in enumerate(range(0, n_windows, chunk_size)):
+            chunk_end = min(chunk_start + chunk_size, n_windows)
+            chunk_n = chunk_end - chunk_start
 
-    # Concatenate axis-wise.  Float32 throughout so peak ≈ 3× per-axis output.
-    wide = pd.concat(axis_frames, axis=1, copy=False)
-    del axis_frames
+            # Per-chunk long_df: small (chunk_size × win_len rows).
+            series_codes = np.repeat(np.arange(chunk_n, dtype=np.int64), win_len)
+            time_idx = np.tile(np.arange(win_len, dtype=np.int32), chunk_n)
+            values = np.ascontiguousarray(
+                X_win[chunk_start:chunk_end, :, axis_idx]
+            ).reshape(-1).astype(np.float32, copy=False)
+            chunk_win_ids = [f"w{chunk_start + i}" for i in range(chunk_n)]
+            id_cat = pd.Categorical.from_codes(series_codes, categories=chunk_win_ids)
+            long_df = pd.DataFrame({"id": id_cat, "time": time_idx, "value": values})
+            del series_codes, time_idx, values
 
-    # Per-axis FFT peak features.  Vectorised over windows for speed.
-    fft_data: dict[str, np.ndarray] = {}
-    for axis_idx, axis in enumerate(axes):
-        # Compute peak / mean magnitude per window in numpy (small, fast).
-        sig = X_win[:, :, axis_idx].astype(np.float32)
-        sig = sig - sig.mean(axis=1, keepdims=True)
-        from scipy.fft import rfft  # type: ignore
-        mag = np.abs(rfft(sig, axis=1))
-        # skip DC bin
-        if mag.shape[1] > 1:
-            peak_idx = np.argmax(mag[:, 1:], axis=1) + 1
-            peak_mag = mag[np.arange(mag.shape[0]), peak_idx]
-            peak_freq = peak_idx.astype(np.float32)
-        else:
-            peak_mag = np.zeros(n_windows, dtype=np.float32)
-            peak_freq = np.zeros(n_windows, dtype=np.float32)
-        mean_mag = mag.mean(axis=1).astype(np.float32)
-        fft_data[f"fft_peak_freq_{axis}"] = peak_freq
-        fft_data[f"fft_peak_mag_{axis}"] = peak_mag.astype(np.float32)
-        fft_data[f"fft_mean_mag_{axis}"] = mean_mag
+            ts_feat = tsfresh_extract(
+                long_df,
+                column_id="id",
+                column_sort="time",
+                column_value="value",
+                default_fc_parameters=settings,
+                n_jobs=resolved_n_jobs,
+                disable_progressbar=disable_progressbar,
+            )
+            del long_df
+            ts_feat.index = ts_feat.index.astype(str)
+            ts_feat = ts_feat.reindex(chunk_win_ids)
 
-    fft_df = pd.DataFrame(fft_data, index=win_ids).astype(np.float32)
-    X_df = pd.concat([wide, fft_df], axis=1, copy=False)
-    del wide, fft_df, fft_data
+            if feature_names_per_axis is None:
+                # First chunk discovers the canonical feature schema.  Settings
+                # are deterministic so subsequent chunks produce the same set.
+                feature_names_per_axis = list(ts_feat.columns)
+                n_feats_per_axis = len(feature_names_per_axis)
+                # Final shape: per-axis tsfresh features ×3 + 9 FFT columns
+                # (peak_freq/peak_mag/mean_mag per axis).
+                out_array = np.zeros(
+                    (n_windows, n_feats_per_axis * len(axes) + 3 * len(axes)),
+                    dtype=np.float32,
+                )
+                print(f"  [tsfresh/window] preallocated output: shape={out_array.shape} "
+                      f"size={out_array.nbytes / 1e9:.2f} GB float32")
+            else:
+                # Defensive reorder (should be a no-op when settings are constant).
+                ts_feat = ts_feat[feature_names_per_axis]
 
-    # Median imputation (paper step).  Done on the fp32 frame.
-    X_df = X_df.replace([np.inf, -np.inf], np.nan)
-    medians = X_df.median(axis=0, skipna=True)
-    X_df = X_df.fillna(medians).fillna(0.0)
-    X = X_df.to_numpy(dtype=np.float32, copy=False)
-    feature_names = list(X_df.columns)
-    del X_df
-    import gc
+            # Write chunk into the preallocated array.  to_numpy avoids
+            # an intermediate DataFrame copy when ts_feat is already aligned.
+            chunk_arr = ts_feat.to_numpy(dtype=np.float32, copy=False)
+            del ts_feat
+            chunk_arr[~np.isfinite(chunk_arr)] = np.nan
+            col_start = axis_idx * n_feats_per_axis
+            col_end = col_start + n_feats_per_axis
+            out_array[chunk_start:chunk_end, col_start:col_end] = chunk_arr
+            del chunk_arr
+
+            print(f"  [tsfresh/window] axis={axis} chunk {ci+1}/{n_chunks} "
+                  f"({chunk_start:,}..{chunk_end:,})")
+            gc.collect()
+
+    assert out_array is not None and feature_names_per_axis is not None
+
+    # Vectorised FFT features over all windows × all axes at once.
+    from scipy.fft import rfft  # type: ignore
+    sig = X_win.astype(np.float32, copy=False)
+    sig = sig - sig.mean(axis=1, keepdims=True)
+    mag = np.abs(rfft(sig, axis=1)).astype(np.float32)  # (n_windows, n_freq, n_axes)
+    n_freq = mag.shape[1]
+    if n_freq > 1:
+        peak_idx = np.argmax(mag[:, 1:, :], axis=1) + 1  # (n_windows, n_axes)
+        peak_mag = np.take_along_axis(mag, peak_idx[:, None, :], axis=1)[:, 0, :]
+        peak_freq = peak_idx.astype(np.float32)
+    else:
+        peak_freq = np.zeros((n_windows, len(axes)), dtype=np.float32)
+        peak_mag = np.zeros((n_windows, len(axes)), dtype=np.float32)
+    mean_mag = mag.mean(axis=1).astype(np.float32)
+    del sig, mag
+
+    fft_col_start = n_feats_per_axis * len(axes)
+    out_array[:, fft_col_start : fft_col_start + len(axes)] = peak_freq
+    out_array[:, fft_col_start + len(axes) : fft_col_start + 2 * len(axes)] = peak_mag
+    out_array[:, fft_col_start + 2 * len(axes) : fft_col_start + 3 * len(axes)] = mean_mag
+
+    # Median imputation across the full output array.
+    nan_mask = np.isnan(out_array)
+    if nan_mask.any():
+        medians = np.nanmedian(out_array, axis=0).astype(np.float32)
+        medians[np.isnan(medians)] = 0.0
+        rows, cols = np.where(nan_mask)
+        out_array[rows, cols] = medians[cols]
+    np.nan_to_num(out_array, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+
+    feature_names = (
+        [f"{c}_{a}" for a in axes for c in feature_names_per_axis]
+        + [f"fft_peak_freq_{a}" for a in axes]
+        + [f"fft_peak_mag_{a}" for a in axes]
+        + [f"fft_mean_mag_{a}" for a in axes]
+    )
     gc.collect()
-    return X, feature_names
+    return out_array, feature_names

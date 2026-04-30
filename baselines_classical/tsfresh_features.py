@@ -76,10 +76,12 @@ def _try_import_tsfresh():
 
 # Cap the auto-resolved worker count.  tsfresh forks workers via
 # `multiprocessing.Pool`, and on big Linux boxes (Domino's 100+ cores) every
-# fork dirties pages of the shared long_df (5–8 GB at typical scale), so the
-# working set explodes — we OOM'd a 224 GB machine with cpu_count() workers.
-# Cap at 8 by default; user can override via overrides.tsfresh_n_jobs in YAML.
-_TSFRESH_DEFAULT_MAX_WORKERS = 8
+# fork dirties pages of the shared long_df (1–3 GB per axis at LOSO scale),
+# so the working set explodes — we OOM'd a 224 GB box with cpu_count() workers.
+# Cap at 4 by default (per-axis processing already removes the costliest
+# pivot, so we don't need many workers); user can override via
+# overrides.tsfresh_n_jobs in YAML.  Setting to 0 forces serial mode.
+_TSFRESH_DEFAULT_MAX_WORKERS = 4
 
 
 def _resolve_tsfresh_n_jobs(n_jobs: int | None,
@@ -295,62 +297,97 @@ def extract_tsfresh_features_from_windows(
         return np.zeros((0, 0), dtype=np.float32), []
 
     axes = ("x", "y", "z")
-    n_axes = len(axes)
-    # Build the long-format frame in vectorised numpy / pandas, NOT a Python
-    # triple-loop.  At 350 K windows × 3 axes × 60 samples that's 63 M rows;
-    # an `f"w{i}__{axis}"` per row would cost ~5 GB of Python str objects
-    # alone and OOM on multi-fold LOSO.  Instead we encode (window, axis) as
-    # an integer "series id" and let pandas Categorical hold the mapping.
-    series_codes = np.repeat(np.arange(n_windows * n_axes, dtype=np.int64), win_len)
-    time_idx = np.tile(np.arange(win_len, dtype=np.int32), n_windows * n_axes)
-    # X_win[i, t, a] → flatten in (i, a, t) order so it lines up with the
-    # series_codes layout (consecutive (window, axis) pairs).
-    values = np.ascontiguousarray(X_win.transpose(0, 2, 1)).reshape(-1).astype(np.float32, copy=False)
-    # Build the category labels lazily (only n_windows * n_axes strings, not n_rows).
-    win_ids = [f"w{i}" for i in range(n_windows)]
-    series_labels = [f"{win_ids[i]}__{axes[a]}" for i in range(n_windows) for a in range(n_axes)]
-    id_cat = pd.Categorical.from_codes(series_codes, categories=series_labels)
-    long_df = pd.DataFrame({"id": id_cat, "time": time_idx, "value": values})
-
     settings = SettingsCls()
     resolved_n_jobs = _resolve_tsfresh_n_jobs(n_jobs)
-    n_series = n_windows * n_axes
+
+    # PER-AXIS extraction.  The single-pass approach (one long_df with
+    # 1.5 M (window × axis) series) forces a final `pivot` from
+    # (n_series, n_features) to (n_windows, n_features × n_axes), and
+    # pandas pivot transiently allocates 3–5× the data size — at LOSO
+    # scale that means 30–50 GB even with a float32 final output, which
+    # is what was OOM-ing the 224 GB box.  Running tsfresh once per axis
+    # leaves us in window-major order from the start, so no pivot is
+    # needed; we just rename columns to "{feat}_{axis}" and concatenate
+    # along the column dimension.  Per-axis peak ~ tsfresh output
+    # (n_windows × n_features × 4 bytes float32) plus the per-axis
+    # long_df (n_windows × win_len × 12 bytes).
     print(f"  [tsfresh/window] feature_set={feature_set_type} n_jobs={n_jobs}"
           f"{f' (resolved={resolved_n_jobs})' if resolved_n_jobs != n_jobs else ''} "
-          f"n_series={n_series} (windows × axes) "
-          f"rows={len(long_df):,}")
-    ts_feat = tsfresh_extract(
-        long_df,
-        column_id="id",
-        column_sort="time",
-        column_value="value",
-        default_fc_parameters=settings,
-        n_jobs=resolved_n_jobs,
-        disable_progressbar=disable_progressbar,
-    )
+          f"n_windows={n_windows:,} per_axis_rows={n_windows * win_len:,}")
+    win_ids = [f"w{i}" for i in range(n_windows)]
+    axis_frames: list[pd.DataFrame] = []
+    feature_names_first: list[str] | None = None
+    for axis_idx, axis in enumerate(axes):
+        # Build a per-axis long_df with `n_windows` series of length win_len.
+        series_codes = np.repeat(np.arange(n_windows, dtype=np.int64), win_len)
+        time_idx = np.tile(np.arange(win_len, dtype=np.int32), n_windows)
+        # Contiguous slice along the axis dimension; flatten in (window, t) order.
+        values = np.ascontiguousarray(X_win[:, :, axis_idx]).reshape(-1).astype(np.float32, copy=False)
+        id_cat = pd.Categorical.from_codes(series_codes, categories=win_ids)
+        long_df = pd.DataFrame({"id": id_cat, "time": time_idx, "value": values})
+        del series_codes, time_idx, values
+        print(f"  [tsfresh/window] axis={axis} series={n_windows:,} rows={len(long_df):,}")
+        ts_feat = tsfresh_extract(
+            long_df,
+            column_id="id",
+            column_sort="time",
+            column_value="value",
+            default_fc_parameters=settings,
+            n_jobs=resolved_n_jobs,
+            disable_progressbar=disable_progressbar,
+        )
+        del long_df
+        # Cast immediately to float32 so we don't carry a 2× tax through the
+        # remaining 2 axes + concat.  Reorder rows to canonical win_ids order
+        # (tsfresh may reshuffle when categorical-coded).
+        ts_feat.index = ts_feat.index.astype(str)
+        ts_feat = ts_feat.reindex(win_ids)
+        ts_feat = ts_feat.astype(np.float32, copy=False)
+        ts_feat.columns = [f"{c}_{axis}" for c in ts_feat.columns]
+        if feature_names_first is None:
+            feature_names_first = list(ts_feat.columns)
+        axis_frames.append(ts_feat)
+        # Best-effort GC between axes — releases the parent's COW pages
+        # the workers dirtied so the next axis can fork cleanly.
+        import gc
+        gc.collect()
 
-    ts_feat.index = ts_feat.index.astype(str)
-    idx_parts = ts_feat.index.str.rsplit("__", n=1, expand=True)
-    ts_feat["__win__"] = idx_parts[0]
-    ts_feat["__axis__"] = idx_parts[1]
-    wide = ts_feat.pivot(index="__win__", columns="__axis__")
-    wide.columns = [f"{col}_{axis}" for col, axis in wide.columns]
-    wide = wide.reindex(win_ids)
+    # Concatenate axis-wise.  Float32 throughout so peak ≈ 3× per-axis output.
+    wide = pd.concat(axis_frames, axis=1, copy=False)
+    del axis_frames
 
-    # Per-axis FFT peak features (paper: tsfresh + FFT).
-    fft_rows = []
-    for i, win_id in enumerate(win_ids):
-        row = {"__win__": win_id}
-        for a, axis in enumerate(axes):
-            stats = _fft_magnitude_stats(X_win[i, :, a].astype(np.float32))
-            for k, v in stats.items():
-                row[f"{k}_{axis}"] = v
-        fft_rows.append(row)
-    fft_df = pd.DataFrame(fft_rows).set_index("__win__").reindex(win_ids)
+    # Per-axis FFT peak features.  Vectorised over windows for speed.
+    fft_data: dict[str, np.ndarray] = {}
+    for axis_idx, axis in enumerate(axes):
+        # Compute peak / mean magnitude per window in numpy (small, fast).
+        sig = X_win[:, :, axis_idx].astype(np.float32)
+        sig = sig - sig.mean(axis=1, keepdims=True)
+        from scipy.fft import rfft  # type: ignore
+        mag = np.abs(rfft(sig, axis=1))
+        # skip DC bin
+        if mag.shape[1] > 1:
+            peak_idx = np.argmax(mag[:, 1:], axis=1) + 1
+            peak_mag = mag[np.arange(mag.shape[0]), peak_idx]
+            peak_freq = peak_idx.astype(np.float32)
+        else:
+            peak_mag = np.zeros(n_windows, dtype=np.float32)
+            peak_freq = np.zeros(n_windows, dtype=np.float32)
+        mean_mag = mag.mean(axis=1).astype(np.float32)
+        fft_data[f"fft_peak_freq_{axis}"] = peak_freq
+        fft_data[f"fft_peak_mag_{axis}"] = peak_mag.astype(np.float32)
+        fft_data[f"fft_mean_mag_{axis}"] = mean_mag
 
-    X_df = pd.concat([wide, fft_df], axis=1)
+    fft_df = pd.DataFrame(fft_data, index=win_ids).astype(np.float32)
+    X_df = pd.concat([wide, fft_df], axis=1, copy=False)
+    del wide, fft_df, fft_data
+
+    # Median imputation (paper step).  Done on the fp32 frame.
     X_df = X_df.replace([np.inf, -np.inf], np.nan)
     medians = X_df.median(axis=0, skipna=True)
     X_df = X_df.fillna(medians).fillna(0.0)
-    X = X_df.to_numpy(dtype=np.float32)
-    return X, list(X_df.columns)
+    X = X_df.to_numpy(dtype=np.float32, copy=False)
+    feature_names = list(X_df.columns)
+    del X_df
+    import gc
+    gc.collect()
+    return X, feature_names

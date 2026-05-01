@@ -140,6 +140,13 @@ def get_metrics(df, suffix):
 
 PAPER_METRIC_COLS = ['F1', 'Precision', 'Recall', 'AUROC', 'R2', 'MAE']
 
+# Per-frame mask metrics on the binary scratch overlay (gt2 / pr2).  Reported
+# alongside the bout-level paper metrics with the same per-fold mean ± std and
+# pooled views.  Note: for binary labels Dice ≡ F1 (both equal
+# 2·TP / (2·TP + FP + FN)); we keep both columns so reviewers don't have to
+# derive the equivalence.  IoU = TP / (TP + FP + FN) is the Jaccard index.
+MASK_METRIC_COLS = ['F1_2', 'IoU_2', 'Dice_2']
+
 
 def compute_paper_metrics(segments_df):
     """Compute the six paper-table metrics on a segment-level DataFrame.
@@ -163,6 +170,21 @@ def compute_paper_metrics(segments_df):
     }
 
 
+def compute_mask_metrics(frame_df):
+    """Compute per-frame mask metrics (F1_2, IoU_2, Dice_2) on the binary
+    scratch overlay.  Operates on the un-aggregated frame-level DataFrame
+    (gt2/pr2), unlike :func:`compute_paper_metrics` which works on bout-level.
+    All values returned in percent, matching ``get_metrics``' F1_2 scale.
+    """
+    f1 = metrics.f1_score(frame_df.gt2, frame_df.pr2, zero_division=0) * 100
+    iou = metrics.jaccard_score(frame_df.gt2, frame_df.pr2, zero_division=0) * 100
+    return {
+        'F1_2':   f1,
+        'IoU_2':  iou,
+        'Dice_2': f1,
+    }
+
+
 def compute_per_fold_metrics(dfp):
     """Compute paper metrics per held-out fold.
 
@@ -179,6 +201,8 @@ def compute_per_fold_metrics(dfp):
             continue
         row = {'fold': fold, 'n_segments': len(seg)}
         row.update(compute_paper_metrics(seg))
+        # Mask metrics need frame-level rows (not bout-aggregated), so use fdf.
+        row.update(compute_mask_metrics(fdf))
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -215,7 +239,7 @@ def build_variant_results(variant_label, model_name, folder_path, df_rest):
 
     # --- Per-fold mean ± std (shows variability across folds) ---
     summary = {'variant': variant_label, 'n_folds': len(per_fold)}
-    for col in PAPER_METRIC_COLS:
+    for col in PAPER_METRIC_COLS + MASK_METRIC_COLS:
         summary[f'{col}_mean'] = per_fold[col].mean()
         summary[f'{col}_std'] = per_fold[col].std(ddof=1) if len(per_fold) > 1 else 0.0
 
@@ -226,6 +250,10 @@ def build_variant_results(variant_label, model_name, folder_path, df_rest):
         pooled = compute_paper_metrics(seg_all)
         for col in PAPER_METRIC_COLS:
             summary[f'{col}_pooled'] = pooled[col]
+        # Mask metrics pooled across all frames (frame-level, not bout-level).
+        pooled_mask = compute_mask_metrics(dfp_valid)
+        for col in MASK_METRIC_COLS:
+            summary[f'{col}_pooled'] = pooled_mask[col]
 
     return summary, per_fold
 
@@ -408,7 +436,8 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
     # Print final summary table: per-fold mean±std AND pooled (all folds
     # concatenated) for every paper metric.  Emitted as two compact tables
     # so each column stays readable.
-    _precision = {'F1': 2, 'Precision': 2, 'Recall': 2, 'AUROC': 2, 'R2': 3, 'MAE': 3}
+    _precision = {'F1': 2, 'Precision': 2, 'Recall': 2, 'AUROC': 2, 'R2': 3, 'MAE': 3,
+                  'F1_2': 2, 'IoU_2': 2, 'Dice_2': 2}
 
     def _fmt_mean_std(row, col):
         m, s = row.get(f'{col}_mean'), row.get(f'{col}_std')
@@ -427,21 +456,25 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
     variant_w = max(len('Variant'), *(len(r['variant']) for _, r in summary_df.iterrows())) + 2
     col_w = 18
 
-    def _print_table(title, formatter):
-        total_w = variant_w + col_w * len(PAPER_METRIC_COLS) + 2
+    def _print_table(title, formatter, cols=PAPER_METRIC_COLS):
+        total_w = variant_w + col_w * len(cols) + 2
         print("\n" + "=" * total_w)
         print(f"  {title}")
         print("=" * total_w)
-        header = f"{'Variant':<{variant_w}}" + "".join(f"{col:>{col_w}}" for col in PAPER_METRIC_COLS)
+        header = f"{'Variant':<{variant_w}}" + "".join(f"{col:>{col_w}}" for col in cols)
         print(header)
         print("-" * total_w)
         for _, row in summary_df.iterrows():
-            cells = "".join(f"{formatter(row, col):>{col_w}}" for col in PAPER_METRIC_COLS)
+            cells = "".join(f"{formatter(row, col):>{col_w}}" for col in cols)
             print(f"{row['variant']:<{variant_w}}" + cells)
         print("=" * total_w)
 
     _print_table(f"PAPER TABLE SUMMARY ({table_kind}) — per-fold mean ± std", _fmt_mean_std)
     _print_table(f"PAPER TABLE SUMMARY ({table_kind}) — pooled (all folds concatenated)", _fmt_pooled)
+    _print_table(f"MASK TABLE SUMMARY ({table_kind}) — per-fold mean ± std",
+                 _fmt_mean_std, cols=MASK_METRIC_COLS)
+    _print_table(f"MASK TABLE SUMMARY ({table_kind}) — pooled (all folds concatenated)",
+                 _fmt_pooled, cols=MASK_METRIC_COLS)
 
     return summary_df, per_fold_dict
 

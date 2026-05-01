@@ -737,19 +737,24 @@ def run_cv(cfg: dict, args) -> None:
 
         # ---- Log sanity metrics ----
         # Windowed runs report the paper's window-level F1/AUROC AND a bout-level
-        # R² in the same units as evaluation/prediction_analysis.py (fraction).
+        # R² in SECONDS — matching what evaluation/prediction_analysis.py does
+        # (it converts gt3 / pr3 fraction columns back to seconds via
+        # `× length / 20` before calling r2_score).  Computing R² on fractions
+        # here would give a different number due to per-bout scaling, since
+        # R² isn't invariant to per-sample affine transforms.
         try:
             from sklearn.metrics import f1_score, roc_auc_score, r2_score
             f1 = f1_score(y_te, pr1, zero_division=0)
             auc = roc_auc_score(y_te, pr1_prob) if len(set(y_te)) > 1 else float("nan")
             unit = "windows" if is_windowed else "segments"
             if is_windowed:
-                # Bout-level R² — recompute gt and pred at the bout grain.
+                # gt3_seconds = sum(scratch frames in bout) / fs   (paper unit)
+                # pr3_seconds = 3.0 × n_pos_windows                (Mahadevan/Ji rule)
                 bout_grp = df_test.groupby("segment", sort=False, observed=True)
-                bout_dur_true = (bout_grp["scratch"].sum() / bout_grp.size()).to_dict()
-                bouts = list(bout_dur_true.keys())
-                gt3 = np.array([bout_dur_true[b] for b in bouts], dtype=np.float32)
-                pr3_arr = np.array([seg_to_pr3.get(b, 0.0) for b in bouts], dtype=np.float32)
+                bout_scratch_seconds = (bout_grp["scratch"].sum() / fs_hz).to_dict()
+                bouts = list(bout_scratch_seconds.keys())
+                gt3 = np.array([bout_scratch_seconds[b] for b in bouts], dtype=np.float32)
+                pr3_arr = np.array([seg_to_pr3_seconds.get(b, 0.0) for b in bouts], dtype=np.float32)
                 r2 = r2_score(gt3, pr3_arr) if np.var(gt3) > 0 else float("nan")
             else:
                 r2 = r2_score(dur_te, pr3) if len(dur_te) > 1 and np.var(dur_te) > 0 else float("nan")

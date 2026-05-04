@@ -645,6 +645,20 @@ def run_cv(cfg: dict, args) -> None:
                 clf_fit_kwargs["sample_weight"] = np.where(y_tr == 1, spw, 1.0)
                 print(f"  ji2023 class re-weight: sample_weight (pos×{spw:.3f}) "
                       f"(n_pos={n_pos}, n_neg={n_neg})")
+        elif arch == "mdpi2024_fe":
+            # Xing 2024 §4 (Discussion): "for the gradient-boosting machine
+            # (GBM) model, we utilized sample weighting as a method to give
+            # more importance to the underrepresented class."  sklearn GBM has
+            # no scale_pos_weight, so use sample_weight = neg/pos for positives,
+            # 1 for negatives — the same balanced-weighting recipe.  Auto by
+            # default; YAML can override via `mdpi_pos_weight`.
+            n_pos = max(1, int(y_tr.sum()))
+            n_neg = max(1, len(y_tr) - n_pos)
+            override_spw = overrides.get("mdpi_pos_weight")
+            spw = float(override_spw) if override_spw is not None else n_neg / n_pos
+            clf_fit_kwargs["sample_weight"] = np.where(y_tr == 1, spw, 1.0)
+            print(f"  mdpi2024_fe class re-weight: sample_weight (pos×{spw:.3f}) "
+                  f"(n_pos={n_pos}, n_neg={n_neg})")
         print(f"  fitting {type(clf).__name__} (classifier) ...")
         clf.fit(X_tr, y_tr, **clf_fit_kwargs)
 

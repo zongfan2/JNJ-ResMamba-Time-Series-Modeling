@@ -455,6 +455,22 @@ def run_cv(cfg: dict, args) -> None:
                   f"{len(Xw_te)} test windows from {n_test_bouts} bouts  "
                   f"(pos_rate train={float(y_tr.mean()) if len(y_tr) else 0.0:.3f} "
                   f"test={float(y_te.mean()) if len(y_te) else 0.0:.3f})")
+            # Visibility for the silent-skip pitfall: count test bouts that
+            # produced zero windows (e.g. shorter than win_seconds with
+            # pad_short=False) and how many of those carry frame-level
+            # scratch.  Those bouts get pr1=0/pr3=0 via fillna in
+            # _build_predictions_df, so they pollute R²/F1 unless flagged.
+            windowed_segs = set(np.unique(seg_te).tolist())
+            all_test_segs = set(df_test["segment"].astype(str).unique().tolist())
+            missing = all_test_segs - windowed_segs
+            if missing:
+                df_missing = df_test[df_test["segment"].astype(str).isin(missing)]
+                n_missing_with_scr = int(
+                    (df_missing.groupby("segment", observed=True)["scratch"].sum() > 0).sum()
+                )
+                print(f"  [windowing] WARNING: {len(missing)}/{n_test_bouts} test bouts "
+                      f"produced no windows; {n_missing_with_scr} of them carry frame-level "
+                      f"scratch (will count as pr3=0 in R²/F1).")
             # df_train is no longer needed past windowing — it can be 2+ GB on
             # the LOSO train fold and stays alive through tsfresh otherwise,
             # crowding out the worker COW pages on memory-tight hosts.  Stash
@@ -617,10 +633,18 @@ def run_cv(cfg: dict, args) -> None:
             n_neg = max(1, len(y_tr) - n_pos)
             override_spw = overrides.get("scale_pos_weight")
             spw = float(override_spw) if override_spw is not None else n_neg / n_pos
-            if hasattr(clf, "scale_pos_weight"):
-                clf.scale_pos_weight = spw
+            # IMPORTANT: LightGBM's sklearn API caches constructor params in an
+            # internal dict; direct attribute assignment is silently ignored at
+            # fit() time on some versions, leaving scale_pos_weight at the
+            # placeholder (1.0).  Use set_params so the value is actually used.
+            if hasattr(clf, "set_params") and "scale_pos_weight" in clf.get_params():
+                clf.set_params(scale_pos_weight=spw)
+                print(f"  ji2023 class re-weight: scale_pos_weight={spw:.3f} "
+                      f"(n_pos={n_pos}, n_neg={n_neg})")
             else:
                 clf_fit_kwargs["sample_weight"] = np.where(y_tr == 1, spw, 1.0)
+                print(f"  ji2023 class re-weight: sample_weight (pos×{spw:.3f}) "
+                      f"(n_pos={n_pos}, n_neg={n_neg})")
         print(f"  fitting {type(clf).__name__} (classifier) ...")
         clf.fit(X_tr, y_tr, **clf_fit_kwargs)
 

@@ -34,6 +34,16 @@ model:
     pos_learnable: false      # sinusoidal; generalises better across segment lengths
     average_mask: false
     supcon_loss: false
+    # Training-side overrides — the inherited 'param_mba_v1' defaults (lr=1e-3
+    # + RMSprop) are ResNet/Mamba-tuned and collapse this transformer:
+    # epoch-1 train_loss=208 spike, then encoder saturates and emits a single
+    # constant logit per head (pr1_prob≈0.27 for every sample, val F1=0).
+    # Standard ViT recipe (AdamW + lr 3e-4) avoids the instability.
+    optim: AdamW
+    lr: 0.0003
+    # Classification head is ~20% positive; without pos_weight the BCE
+    # bias drives the head to predict the majority class (pr1=0).
+    pos_weight_l1: true
 
 training:
   output: baseline-vit1d-bs32-loso

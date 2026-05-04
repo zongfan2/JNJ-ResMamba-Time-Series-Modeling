@@ -28,6 +28,7 @@ def make_windows(
     win_seconds: float = 3.0,
     stride_seconds: float = 1.5,
     label_min_scratch_seconds: float = 1.0,
+    pad_short: bool = True,
     seg_col: str = "segment",
     xyz_cols=("x", "y", "z"),
     label_col: str = "scratch",
@@ -43,6 +44,11 @@ def make_windows(
         label_min_scratch_seconds: a window is labelled positive if it
             contains more than this many seconds of frame-level scratch.
             Ji 2023 uses 1.0 s on a 3-s window; set to 0.0 for any-overlap.
+        pad_short: if True, bouts shorter than ``win_seconds`` emit one
+            zero-padded window so they receive a prediction at evaluation
+            time (otherwise they are silently dropped from training AND
+            test, leaving downstream aggregation to fillna(0) — which
+            tanks R² for any short bout with frame-level scratch).
         seg_col / xyz_cols / label_col: column names in ``df``.
         extra_cols: per-bout grouping columns to propagate (PID, FOLD,
             etc.). Each window inherits the bout's value verbatim.
@@ -65,15 +71,35 @@ def make_windows(
     extras: dict[str, list] = {c: [] for c in extra_cols if c in df.columns}
 
     grouped = df.groupby(seg_col, sort=False, observed=True)
+    n_short_dropped = 0
+    n_short_padded = 0
     for seg_id, seq in grouped:
         L = len(seq)
-        if L < win_len:
-            continue  # bouts shorter than the window are skipped
+        seg_str = str(seg_id)
         xyz = seq.loc[:, list(xyz_cols)].to_numpy(dtype=np.float32)
         scratch = seq[label_col].to_numpy(dtype=np.float32)
-        seg_str = str(seg_id)
         # Per-bout extras: take the first frame's value (constant within bout).
         extras_row = {c: seq[c].iloc[0] for c in extras}
+
+        if L < win_len:
+            if not pad_short:
+                n_short_dropped += 1
+                continue
+            # Zero-pad the bout up to one full window so it still gets a
+            # prediction at evaluation time.  The Ji label rule applies as
+            # usual; padded frames contribute 0 to scr_frames.
+            n_short_padded += 1
+            xyz_pad = np.zeros((win_len, len(xyz_cols)), dtype=np.float32)
+            xyz_pad[:L] = xyz
+            scr_frames = float(scratch.sum())
+            X_list.append(xyz_pad)
+            dur_list.append(scr_frames / fs)
+            y_list.append(int(scr_frames > label_min_frames))
+            seg_list.append(seg_str)
+            win_list.append(f"{seg_str}__w0")
+            for c, v in extras_row.items():
+                extras[c].append(v)
+            continue
 
         # Slide windows: starts = 0, stride, 2*stride, ... up to L-win_len.
         last_start = L - win_len
@@ -88,6 +114,13 @@ def make_windows(
             win_list.append(f"{seg_str}__w{k}")
             for c, v in extras_row.items():
                 extras[c].append(v)
+
+    if n_short_dropped > 0:
+        print(f"  [windowing] dropped {n_short_dropped} bouts shorter than "
+              f"{win_seconds}s (pad_short=False)")
+    if n_short_padded > 0:
+        print(f"  [windowing] zero-padded {n_short_padded} bouts shorter than "
+              f"{win_seconds}s to one window each")
 
     if not X_list:
         empty_arr = np.zeros((0, win_len, 3), dtype=np.float32)

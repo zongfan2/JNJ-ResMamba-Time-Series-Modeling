@@ -21,7 +21,14 @@ data:
 
 model:
   architecture: patchtst
-  overrides: {}
+  overrides:
+    # Inherited 'param_mba_v1' defaults (lr=1e-3 + RMSprop) saturate this
+    # transformer's mask head: classification F1 ≈ 0.51 but per-frame IoU_2
+    # collapses to 0 (pr2 all zeros).  Same fix as ViT1D — standard ViT-style
+    # optimizer + warmup-friendly lr.
+    optim: AdamW
+    lr: 0.0003
+    pos_weight_l1: true
 
 training:
   output: baseline-patchtst-bs32-loso

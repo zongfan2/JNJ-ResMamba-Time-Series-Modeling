@@ -788,11 +788,22 @@ def run_cv(cfg: dict, args) -> None:
             if is_windowed:
                 # gt3_seconds = sum(scratch frames in bout) / fs   (paper unit)
                 # pr3_seconds = 3.0 × n_pos_windows                (Mahadevan/Ji rule)
+                # Cap pr3_seconds at bout_total_seconds to mirror the CSV path
+                # (line 695-698 caps pr3_fraction at 1.0).  Without this cap,
+                # the sanity-print R² is more pessimistic than the downstream
+                # prediction_analysis.py R² for high-FPR per-window classifiers.
                 bout_grp = df_test.groupby("segment", sort=False, observed=True)
                 bout_scratch_seconds = (bout_grp["scratch"].sum() / fs_hz).to_dict()
+                bout_total_seconds = (bout_grp.size() / fs_hz).to_dict()
                 bouts = list(bout_scratch_seconds.keys())
                 gt3 = np.array([bout_scratch_seconds[b] for b in bouts], dtype=np.float32)
-                pr3_arr = np.array([seg_to_pr3_seconds.get(b, 0.0) for b in bouts], dtype=np.float32)
+                pr3_arr = np.array(
+                    [
+                        min(seg_to_pr3_seconds.get(b, 0.0), bout_total_seconds[b])
+                        for b in bouts
+                    ],
+                    dtype=np.float32,
+                )
                 r2 = r2_score(gt3, pr3_arr) if np.var(gt3) > 0 else float("nan")
             else:
                 r2 = r2_score(dur_te, pr3) if len(dur_te) > 1 and np.var(dur_te) > 0 else float("nan")

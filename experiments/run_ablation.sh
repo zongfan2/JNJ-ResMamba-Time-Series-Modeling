@@ -4,7 +4,9 @@
 #
 # Each variant is a separate Domino job. Pass the variant name as $1; the
 # script resolves it to experiments/configs/ablation/ablation_<variant>.yaml
-# and invokes training/train_scratch.py.
+# and invokes the appropriate training script — train_classical.py for the
+# windowed-pipeline baselines (Mahadevan / Ji / Xing FE / Xing CNN),
+# train_scratch.py for everything else.
 #
 # Usage (from Domino):
 #   bash /mnt/code/munge/predictive_modeling/code/JNJ-ResMamba-Time-Series-Modeling/experiments/run_ablation.sh <variant>
@@ -36,13 +38,16 @@
 #   baseline_mahadevan2021 — classical: RandomForest + 36 hand-crafted features
 #   baseline_ji2023       — classical: LightGBM + 36 hand-crafted features (TDA/DL omitted)
 #   baseline_mdpi2024_fe  — Xing 2024 FE: tsfresh + sklearn GradientBoosting
-#   baseline_mdpi2024_cnn — Xing 2024 DL: ConvNormPool 1D CNN
+#   baseline_mdpi2024_cnn — Xing 2024 DL: ConvNormPool 1D CNN on 3-s windows
+#                           (paper-faithful; routes through train_classical.py
+#                           via the WindowedCNNClassifier adapter)
 #
 # Extra CLI args after the variant are forwarded to the training script, e.g.:
 #   bash run_ablation.sh no_mamba --num_gpu 2
 #
-# Classical baselines (mahadevan2021 / ji2023) dispatch to
-# training/train_classical.py; everything else uses training/train_scratch.py.
+# Windowed-pipeline baselines (mahadevan2021 / ji2023 / mdpi2024_fe /
+# mdpi2024_cnn) dispatch to training/train_classical.py; everything else
+# uses training/train_scratch.py.
 
 set -euo pipefail
 
@@ -79,7 +84,7 @@ VALID_VARIANTS=(
 
 if [[ $# -lt 1 ]]; then
     echo "Error: missing variant argument." >&2
-    echo "Usage: $0 <variant> [extra args for train_scratch.py]" >&2
+    echo "Usage: $0 <variant> [extra args for the training script]" >&2
     echo "Valid variants: ${VALID_VARIANTS[*]}" >&2
     exit 2
 fi
@@ -112,9 +117,11 @@ echo "   variant: ${VARIANT}"
 echo "   config:  ${CONFIG}"
 echo "=============================================="
 
-# Classical ML baselines use a different runner.
+# Classical ML baselines (and the Xing 2024 ConvNormPool CNN, which now
+# shares the windowed pipeline with the GBM-family baselines) use the
+# train_classical runner; everything else uses train_scratch.
 case "${VARIANT}" in
-    baseline_mahadevan2021|baseline_ji2023|baseline_mdpi2024_fe)
+    baseline_mahadevan2021|baseline_ji2023|baseline_mdpi2024_fe|baseline_mdpi2024_cnn)
         RUNNER="${ROOT_DIR}/training/train_classical.py"
         ;;
     *)

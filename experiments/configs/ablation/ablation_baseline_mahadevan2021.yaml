@@ -1,11 +1,18 @@
 # =============================================================================
-# Baseline comparison — Mahadevan et al. 2021 (npj Digital Medicine), XGBoost variant
+# Baseline comparison — Mahadevan et al. 2021 (npj Digital Medicine), RandomForest
 # =============================================================================
-# Paper 1's feature engineering (36 time/frequency features on SVM/PC1/PC2 of
-# the 0.25 Hz high-pass-filtered accelerometer) + 26 RFECV-selected features
-# feeding an XGBoost classifier (replacing the paper's RandomForest per our
-# experimental setup) and an XGBoost regressor for per-segment scratch
-# duration.  Reference:
+# Paper-faithful replica: Paper 1's feature engineering (36 time/frequency
+# features on SVM/PC1/PC2 of the 0.25 Hz high-pass-filtered accelerometer)
+# + 26 RFECV-selected features feeding a RandomForest classifier with
+# 50 estimators (paper §Methods: "A random forest classifier with 50
+# estimators was then trained based on the selected features. ... saw no
+# significant improvement in model performance as we increased the number
+# of estimators past 50.").  Class balancing via random undersampling
+# before feature selection (also paper-faithful).  An XGBoost regressor is
+# kept for the per-segment scratch duration hurdle estimator (the paper
+# aggregates via the count rule = win_seconds × n_pos_windows, so this
+# regressor is only used when ``windowing.duration_estimator: regressor``).
+# Reference:
 #   https://www.nature.com/articles/s41746-021-00402-x
 #
 # Runs via training/train_classical.py.  LOSO cross-validation.
@@ -16,9 +23,9 @@
 
 experiment:
   name: baseline_mahadevan2021
-  description: "Paper 1 baseline — XGBoost + 36 hand-crafted features (classification + duration regression)."
+  description: "Paper 1 baseline — RandomForest (50 trees) + 26-of-36 RFECV-selected features (paper-faithful)."
   task: scratch_detection
-  date: "2026-04-23"
+  date: "2026-05-08"
 
 data:
   input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
@@ -28,18 +35,18 @@ data:
 model:
   architecture: mahadevan2021
   overrides:
-    # XGBoost classifier
-    n_estimators: 300
-    learning_rate: 0.05
-    max_depth: 6
-    subsample: 0.9
-    colsample_bytree: 0.9
-    reg_lambda: 1.0
+    # RandomForest classifier — paper values.
+    n_estimators: 50              # paper: 50; tested 25/50/75/100, no gain past 50.
+    max_depth: -1                 # null / unconstrained, sklearn default.
+    min_samples_leaf: 1           # sklearn default.
+    max_features: sqrt            # sklearn default for classification.
     # feature selection
-    num_features: 26
+    num_features: 26              # 26-of-36 via RFECV (paper).
     random_state: 42
-    # Duration regression — zero-inflated target; train reg on positives
-    # only and gate by p_scratch (pr3 = p * E[dur|scratch]).
+    # Duration regression — zero-inflated target; hurdle (positives only).
+    # Only used if windowing.duration_estimator is 'regressor'; with 'count'
+    # it's trained-but-unused, kept here so the YAML can flip estimator
+    # post-hoc without retraining.
     reg_hurdle: true
     reg_log_target: true
 

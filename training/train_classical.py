@@ -7,9 +7,10 @@ same ``Y_test_Y_pred_test_subject_<FOLD>.csv`` format so they land directly
 in evaluation/prediction_analysis.py.
 
 Supported classifiers (set via ``model.architecture`` in the YAML):
-  - ``mahadevan2021``  Random Forest (50 trees) on 26-of-36 RFECV-selected
-                       features.  Paper 1 (Mahadevan et al., npj Digit. Med.
-                       2021).  Feature set: SVM/PC1/PC2 × 12 time/freq stats.
+  - ``mahadevan2021``  RandomForest (50 trees, paper-faithful) on 26-of-36
+                       RFECV-selected features.  Paper 1 (Mahadevan et al.,
+                       npj Digit. Med. 2021).  Feature set: SVM/PC1/PC2 ×
+                       12 time/freq stats.
   - ``ji2023``         LightGBM with ``scale_pos_weight`` on the same 36
                        features.  Paper 2 (Ji et al., npj Digit. Med. 2023) —
                        pragmatic replication that omits the TDA and DL
@@ -95,32 +96,25 @@ def load_config(path: str) -> dict:
 def build_classifier(arch: str, overrides: dict):
     """Return a fitted-on-demand sklearn-compatible classifier."""
     if arch == "mahadevan2021":
-        # XGBoost (per user request, replacing paper 1's RandomForest).
-        xgb = _try_import_xgboost()
-        if xgb is not None:
-            return xgb.XGBClassifier(
-                n_estimators=int(overrides.get("n_estimators", 300)),
-                learning_rate=float(overrides.get("learning_rate", 0.05)),
-                max_depth=int(overrides.get("max_depth", 6)),
-                min_child_weight=float(overrides.get("min_child_weight", 1.0)),
-                reg_lambda=float(overrides.get("reg_lambda", 1.0)),
-                subsample=float(overrides.get("subsample", 0.9)),
-                colsample_bytree=float(overrides.get("colsample_bytree", 0.9)),
-                random_state=int(overrides.get("random_state", 42)),
-                n_jobs=int(overrides.get("n_jobs", -1)),
-                eval_metric="logloss",
-                tree_method="hist",
-            )
-        from sklearn.ensemble import HistGradientBoostingClassifier
-        print("[classical] xgboost unavailable — falling back to "
-              "sklearn.HistGradientBoostingClassifier.")
-        return HistGradientBoostingClassifier(
-            max_iter=int(overrides.get("n_estimators", 300)),
-            learning_rate=float(overrides.get("learning_rate", 0.05)),
-            max_depth=None if int(overrides.get("max_depth", -1)) < 0 else int(overrides["max_depth"]),
-            min_samples_leaf=int(overrides.get("min_child_samples", 20)),
-            l2_regularization=float(overrides.get("reg_lambda", 1.0)),
+        # Paper-faithful: RandomForest with 50 estimators.  Mahadevan 2021
+        # (npj Digital Medicine 4:42) §Methods: "A random forest classifier
+        # with 50 estimators was then trained based on the selected features.
+        # We evaluated multiple settings for number of estimators in the
+        # random forest classifier (25, 50, 75, and 100) and saw no
+        # significant improvement in model performance as we increased the
+        # number of estimators past 50."  Class balancing is done upstream
+        # via balance_classes() (random undersampling, also paper-faithful).
+        from sklearn.ensemble import RandomForestClassifier
+        return RandomForestClassifier(
+            n_estimators=int(overrides.get("n_estimators", 50)),
+            max_depth=(
+                None if int(overrides.get("max_depth", -1)) < 0
+                else int(overrides["max_depth"])
+            ),
+            min_samples_leaf=int(overrides.get("min_samples_leaf", 1)),
+            max_features=overrides.get("max_features", "sqrt"),
             random_state=int(overrides.get("random_state", 42)),
+            n_jobs=int(overrides.get("n_jobs", -1)),
         )
     elif arch == "ji2023":
         lgb = _try_import_lightgbm()

@@ -903,6 +903,7 @@ ABLATION_VARIANTS = {
     # Re-running after the size-1-batch BN failure — uncomment when done:
     # 'w/o Balanced Sampling':    'ablation-no_balanced-bs32-fold4',
     'Single-Task (Cls Only)':   'ablation-cls_only-bs32-fold4',
+    'Single-Task (Mask Only)':  'ablation-mask_only-bs32-fold4',
     # Baseline comparisons — LOSO outputs (uncomment once runs finish):
     # 'ResNet1D':                 'baseline-resnet1d-bs32-loso',
     # 'MTCNA2':                   'baseline-mtcna2-bs32-loso',
@@ -914,7 +915,7 @@ ABLATION_VARIANTS = {
     # 'Mahadevan2021 (XGB)':      'baseline-mahadevan2021-loso',
     # 'Ji2023 (pragmatic)':       'baseline-ji2023-loso',
     # 'Xing2024 (FE)':            'baseline-mdpi2024_fe-loso',
-    # 'Xing2024 (CNN)':           'baseline-mdpi2024_cnn-bs32-loso',
+    # 'Xing2024 (CNN)':           'baseline-mdpi2024_cnn-loso',
 }
 
 

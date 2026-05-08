@@ -1,56 +1,78 @@
 # =============================================================================
 # Baseline — Xing et al. 2024 (MDPI Sensors 24(11):3364), deep-learning arm
 # =============================================================================
-# ConvNormPool 1D CNN on raw accelerometer windows.  Paper uses 3 stacked
-# ConvNormPool modules (Conv1d → BN → Swish → MaxPool) with hidden=128 and
-# kernel=5, followed by GlobalAvgPool and 2 FC layers; Focal loss; Adam
-# lr=1e-3, weight decay 1e-3; StepLR(step=10, gamma=0.1); 200 epochs, batch 16;
-# 1:1 class-balanced sampling during training.  Reference:
-#   https://www.mdpi.com/1424-8220/24/11/3364
+# ConvNormPool 1D CNN trained on the SAME 3-s window protocol as the classical
+# Xing FE baseline so the two arms are directly comparable.  Routes through
+# training/train_classical.py — the CNN is wrapped in a sklearn-style adapter
+# (baselines_classical/cnn_classifier.py) and shares the windowed pipeline's
+# train/infer striding, count-rule pr3 aggregation, and CSV schema with the
+# GBM baselines (Mahadevan 2021, Ji 2023, Xing FE 2024).
 #
-# Runs via training/train_scratch.py (standard DL path).  LOSO cross-validation.
+# Paper recipe (https://www.mdpi.com/1424-8220/24/11/3364):
+#   - 3 × ConvNormPool (Conv1d → BN → Swish → MaxPool), hidden=128, kernel=5
+#   - GlobalAvgPool → 2 FC → 1 binary logit
+#   - Focal loss (γ=2)
+#   - Adam(lr=1e-3, weight_decay=1e-3), StepLR(step=10, γ=0.1)
+#   - 200 epochs, batch=16
+#   - 1:1 class-balanced sampling
+#
+# The multi-task heads from models/mdpi2024_cnn.py are dropped here so the
+# CNN matches the paper's window classification objective; pr3 still comes
+# from the count rule (= win_seconds × n_pos_windows), pr2 is broadcast
+# pr1 to every frame, exactly like the other classical baselines.
 #
 # Usage:
-#   bash experiments/run_ablation.sh baseline_mdpi2024_cnn
+#   python3.11 training/train_classical.py \
+#     --config experiments/configs/ablation/ablation_baseline_mdpi2024_cnn.yaml
 
 experiment:
   name: baseline_mdpi2024_cnn
-  description: "Xing 2024 DL — ConvNormPool 1D CNN."
+  description: "Xing 2024 DL — ConvNormPool 1D CNN on paper-faithful 3-s windows."
   task: scratch_detection
-  date: "2026-04-24"
+  date: "2026-05-08"
 
 data:
   input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
   format: folder
-  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+  scaler_path: ""
 
 model:
   architecture: mdpi2024_cnn
   overrides:
+    # Encoder topology — paper values.
     hidden_size: 128
     kernel_size: 5
     pool_size: 2
     num_blocks: 3
     fc_dim: 128
     dropout: 0.0
-    average_mask: false
-    supcon_loss: false
+    # Training recipe — paper values.
+    epochs: 200
+    batch_size: 16
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-3
+    lr_step: 10
+    lr_gamma: 0.1
+    focal_gamma: 2.0
+    random_state: 42
 
 training:
-  output: baseline-mdpi2024_cnn-bs32-loso
+  output: baseline-mdpi2024_cnn-loso
   execution_mode: train
-  epochs: 200
-  batch_size: 32
-  num_gpu: 0
-  clear_tracker: true
-  data_augmentation: 0
   testing: LOSO
+  num_gpu: 0
 
-transfer_learning:
-  freeze_encoder: false
-  pretrained_model_path: ""
+# Paper-faithful 3-s sliding-window protocol — same as Mahadevan / Ji / Xing FE.
+windowing:
+  enabled: true
+  fs_hz: 20
+  win_seconds: 3.0
+  train_stride_seconds: 1.5     # 50% overlap during training
+  infer_stride_seconds: 3.0     # non-overlap at inference (count rule)
+  label_min_scratch_seconds: 1.0  # Ji 2023 rule (>1 s scratch → positive)
+  duration_estimator: count     # pr3 = win_seconds × n_pos_windows; matches paper
+  min_pos_windows: 2            # require >=2 positive windows to flip bout positive (suppresses single-FP-window 3-s pr3 spikes that drive R^2 negative)
 
 reproducibility:
   random_seed: 42
-  torch_seed: 42
   numpy_seed: 42

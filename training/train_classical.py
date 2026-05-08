@@ -169,6 +169,31 @@ def build_classifier(arch: str, overrides: dict):
             subsample=float(overrides.get("subsample", 1.0)),
             random_state=int(overrides.get("random_state", 42)),
         )
+    elif arch == "mdpi2024_cnn":
+        # Xing et al. 2024 deep-learning arm — ConvNormPool CNN on raw 3-s
+        # windows.  Window-level binary classifier with focal loss + 1:1
+        # balanced sampling + Adam(lr=1e-3, wd=1e-3) + StepLR(step=10, γ=0.1).
+        # Wrapped in a sklearn-style adapter so it slots into the same fit /
+        # predict / aggregate flow as the GBM-family baselines; pr3 still
+        # comes from the count rule, not from the CNN itself.
+        from baselines_classical.cnn_classifier import WindowedCNNClassifier
+        return WindowedCNNClassifier(
+            hidden_size=int(overrides.get("hidden_size", 128)),
+            kernel_size=int(overrides.get("kernel_size", 5)),
+            pool_size=int(overrides.get("pool_size", 2)),
+            num_blocks=int(overrides.get("num_blocks", 3)),
+            fc_dim=int(overrides.get("fc_dim", 128)),
+            dropout=float(overrides.get("dropout", 0.0)),
+            epochs=int(overrides.get("epochs", 200)),
+            batch_size=int(overrides.get("batch_size", 16)),
+            lr=float(overrides.get("learning_rate", 1e-3)),
+            weight_decay=float(overrides.get("weight_decay", 1e-3)),
+            lr_step=int(overrides.get("lr_step", 10)),
+            lr_gamma=float(overrides.get("lr_gamma", 0.1)),
+            focal_gamma=float(overrides.get("focal_gamma", 2.0)),
+            random_state=int(overrides.get("random_state", 42)),
+            verbose=bool(overrides.get("verbose", True)),
+        )
     else:
         raise ValueError(f"Unknown classical baseline architecture: {arch}")
 
@@ -482,7 +507,15 @@ def run_cv(cfg: dict, args) -> None:
             del df_train
             import gc
             gc.collect()
-            if feature_set in ("tsfresh", "mdpi2024"):
+            if arch == "mdpi2024_cnn":
+                # Xing 2024 deep arm: feed the raw [N, win_len, 3] tensors
+                # straight into the CNN — no hand-crafted features.
+                print(f"  [cnn] passing raw {Xw_tr.shape} train windows / "
+                      f"{Xw_te.shape} test windows to ConvNormPool CNN")
+                X_tr = Xw_tr
+                X_te = Xw_te
+                feat_names_fold = []
+            elif feature_set in ("tsfresh", "mdpi2024"):
                 from baselines_classical.tsfresh_features import (  # noqa: E402
                     extract_tsfresh_features_from_windows,
                 )
@@ -544,7 +577,11 @@ def run_cv(cfg: dict, args) -> None:
         X_te = np.nan_to_num(X_te, nan=0.0, posinf=0.0, neginf=0.0)
 
         # ---- Standardize features (Xing 2024 paper step; safe for others) ----
-        if bool(overrides.get("standardize_features", feature_set in ("tsfresh", "mdpi2024"))):
+        # Skip for the CNN: X_tr/X_te are raw [N, T, 3] tensors, not feature
+        # matrices — feature-axis standardisation would be ill-defined.
+        if arch != "mdpi2024_cnn" and bool(
+            overrides.get("standardize_features", feature_set in ("tsfresh", "mdpi2024"))
+        ):
             mu = X_tr.mean(axis=0, keepdims=True)
             sd = X_tr.std(axis=0, keepdims=True)
             sd = np.where(sd < 1e-8, 1.0, sd)
@@ -622,6 +659,10 @@ def run_cv(cfg: dict, args) -> None:
             X_te = X_te[:, keep]
             selected = [feat_names_fold[i] for i in keep]
             print(f"  selected {len(keep)} features")
+        elif arch == "mdpi2024_cnn":
+            # CNN consumes raw [N, T, 3] tensors — there's no feature axis to
+            # select over.  Empty index keeps the joblib metadata honest.
+            keep = np.array([], dtype=np.int64)
         else:
             keep = np.arange(X_tr.shape[1])
 

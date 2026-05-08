@@ -78,7 +78,7 @@ windowing:
   infer_stride_seconds: 3.0
   label_min_scratch_seconds: 1.0
   duration_estimator: count
-  min_pos_windows: 1
+  min_pos_windows: 2  # require >=2 positive windows to flip bout positive (suppresses single-FP-window 3-s pr3 spikes that drive R^2 negative)
 
 reproducibility:
   random_seed: 42

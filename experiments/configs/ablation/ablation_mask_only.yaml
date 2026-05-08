@@ -1,0 +1,50 @@
+# =============================================================================
+# Ablation — "Single-Task (Mask Only)" : only optimize the per-timestep mask loss
+# =============================================================================
+# Keeps wl2 (per-timestep scratch mask) active and zeroes out wl1
+# (binary classification) and wl3 (severity regression). Multi-task heads still
+# exist but their losses do not backpropagate. Bout-level pr1 is recovered
+# downstream by pooling the mask predictions in evaluation/postprocessing.py.
+#
+# Companion to ablation_cls_only.yaml — together they isolate the contribution
+# of dense (frame-level) vs. sparse (bout-level) supervision.
+#
+# Usage:
+#   python3.11 training/train_scratch.py \
+#     --config experiments/configs/ablation/ablation_mask_only.yaml
+
+experiment:
+  name: ablation_mask_only
+  description: "MBA_v1 trained with mask loss only (wl1 = wl3 = 0)."
+  task: scratch_detection
+  date: "2026-05-06"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: /mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib
+
+model:
+  architecture: mbav1
+  overrides:
+    wl1: 0.0
+    wl3: 0.0
+
+training:
+  output: ablation-mask_only-bs32-fold4
+  execution_mode: train
+  epochs: 200
+  batch_size: 32
+  num_gpu: 0
+  clear_tracker: true
+  data_augmentation: 0
+  testing: LOFO
+
+transfer_learning:
+  freeze_encoder: false
+  pretrained_model_path: ""
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42

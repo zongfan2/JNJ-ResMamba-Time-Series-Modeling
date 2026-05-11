@@ -25,7 +25,8 @@
 #   no_cross_attn         — use_skip_cross_attention = false
 #   no_cross_attn_dino    — no_cross_attn + DINO pretrained encoder
 #   no_balanced           — stratify = false
-#   cls_only              — wl2 = wl3 = 0
+#   cls_only              — wl2 = wl3 = 0 (classification head only)
+#   mask_only             — wl1 = wl3 = 0 (per-timestep mask head only)
 #
 # Baselines (comparison models):
 #   baseline_resnet1d     — 1D ResNet-18
@@ -69,6 +70,7 @@ VALID_VARIANTS=(
     no_cross_attn_dino
     no_balanced
     cls_only
+    mask_only
     baseline_resnet1d
     baseline_mtcna2
     baseline_patchtst

@@ -24,6 +24,16 @@
 # Usage:
 #   python3.11 training/train_classical.py \
 #     --config experiments/configs/ablation/ablation_baseline_mdpi2024_cnn.yaml
+#
+# Resuming an interrupted run (200 epochs × 29 LOSO folds is long — this
+# baseline is the most likely to be interrupted mid-sweep):
+#   python3.11 training/train_classical.py \
+#     --config experiments/configs/ablation/ablation_baseline_mdpi2024_cnn.yaml \
+#     --skip_existing
+# or via the launcher:
+#   bash experiments/run_ablation.sh baseline_mdpi2024_cnn --skip_existing
+# Folds whose Y_test_Y_pred_test_subject_<PID>.csv already exists in the
+# predictions folder are skipped end-to-end (no training, no inference).
 
 experiment:
   name: baseline_mdpi2024_cnn

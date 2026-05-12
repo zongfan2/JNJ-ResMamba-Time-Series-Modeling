@@ -513,6 +513,24 @@ def run_model(model,df,batch_size,train_mode,device,optimizer,scheduler,stratify
                       'loss3': "%.2f" % (np.mean(loss3_s)),
                       'steps':batches}
     else:
+        # Mask-only ablation rescue: when wl1 / wl3 are 0 the cls / reg heads
+        # receive no gradient and emit ~random outputs.  Re-derive bout-level
+        # pr1 / pr3 from the trained per-frame pr2 so the CSV reflects what
+        # the model can actually predict (matches ablation_mask_only.yaml's
+        # stated intent).  Rule mirrors evaluation/prediction_analysis.py:
+        # > 20 positive frames (= > 1 s @ 20 Hz) flips bout positive; pr3 is
+        # the ratio of positive frames in the segment (gt3 ratio convention).
+        if (wl1 == 0 or wl3 == 0) and len(segments1) > 0 and len(pr2s) > 0:
+            seg_df = pd.DataFrame({"segment": segments2,
+                                   "pr2": pr2s,
+                                   "pr2_prob": pr2_probs})
+            grp = seg_df.groupby("segment", sort=False)
+            if wl1 == 0:
+                seg_sum = grp["pr2"].sum().reindex(segments1)
+                pr1s = (seg_sum.values > 20).astype(np.float32)
+                pr1_probs = grp["pr2_prob"].mean().reindex(segments1).values.astype(np.float32)
+            if wl3 == 0:
+                pr3s = grp["pr2"].mean().reindex(segments1).values.astype(np.float32)
         if get_predictions:
             predictions1=pd.DataFrame({"segment":segments1,
                                        "gt1": gt1s,

@@ -3,8 +3,15 @@
 # =============================================================================
 # Keeps wl2 (per-timestep scratch mask) active and zeroes out wl1
 # (binary classification) and wl3 (severity regression). Multi-task heads still
-# exist but their losses do not backpropagate. Bout-level pr1 is recovered
-# downstream by pooling the mask predictions in evaluation/postprocessing.py.
+# exist but their losses do not backpropagate. Because the cls / reg heads
+# would emit ~random outputs in that regime, training/train_scratch.py's
+# run_model re-derives bout-level pr1 / pr3 from the trained per-frame pr2
+# before writing the per-fold CSV (see the "Mask-only ablation rescue"
+# block).  The rule mirrors evaluation/prediction_analysis.py:227 — > 20
+# positive mask frames (= > 1 s @ 20 Hz) flips a bout positive, and pr3 is
+# the ratio of positive frames in the segment (matches the gt3 ratio
+# convention).  This keeps mask_only directly comparable against cls_only
+# without an eval-side special case.
 #
 # Companion to ablation_cls_only.yaml — together they isolate the contribution
 # of dense (frame-level) vs. sparse (bout-level) supervision.

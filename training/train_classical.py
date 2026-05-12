@@ -80,6 +80,11 @@ def parse_args():
     p.add_argument("--config", type=str, required=True)
     p.add_argument("--single_fold", type=str, default="",
                    help="Restrict LOFO loop to one fold (e.g. FOLD4).")
+    p.add_argument("--skip_existing", action="store_true",
+                   help="Skip folds whose Y_test_Y_pred_test_subject_<fold>.csv "
+                        "already exists in the predictions folder. Useful for "
+                        "resuming an interrupted multi-fold run without "
+                        "redoing completed work.")
     return p.parse_args()
 
 
@@ -442,6 +447,14 @@ def run_cv(cfg: dict, args) -> None:
 
     for fold in groups:
         print(f"\n[classical] ==== {group_col}={fold} ====  arch={arch}")
+        # Resume support: skip folds whose prediction CSV already exists.
+        # The CSV is the last artefact written per fold (after training,
+        # inference, and aggregation), so its presence means the fold
+        # completed end-to-end on a previous run.
+        existing_csv = predictions_folder / f"Y_test_Y_pred_test_subject_{fold}.csv"
+        if args.skip_existing and existing_csv.exists():
+            print(f"  [resume] {existing_csv.name} exists; skipping")
+            continue
         t0 = time.time()
         df_train = df[df[group_col] != fold]
         df_test = df[df[group_col] == fold]

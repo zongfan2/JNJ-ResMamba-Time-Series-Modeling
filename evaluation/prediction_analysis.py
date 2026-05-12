@@ -207,17 +207,39 @@ def compute_per_fold_metrics(dfp):
     return pd.DataFrame(rows)
 
 
-def build_variant_results(variant_label, model_name, folder_path, df_rest):
+def build_variant_results(variant_label, model_name, folder_path, df_rest,
+                          pr1_threshold=None):
     """Load a variant's LOFO predictions and return one summary row.
 
     Returns a dict with mean and std of each paper metric, plus the raw
     per-fold DataFrame for downstream inspection.
+
+    ``pr1_threshold`` re-derives bout-level ``pr1`` from the CSV's
+    ``pr1_probs`` column before the segment-level pipeline runs.  ``None``
+    leaves the column as written (default ``round(sigmoid)`` → τ=0.5).
+    Set τ=0.6 to match the threshold reported in the v1.0 tech spec
+    §5.3.2 (Figure 10: F1-maximizing τ=0.62, rounded to 0.6 for the
+    final productionized model).
     """
     dfp = get_predictions(folder_path, model_name, df_rest, filter_tso=True)
     if len(dfp) == 0:
         print(f"  [paper] {variant_label!r}: no predictions found under "
               f"{os.path.join(folder_path, model_name)}")
         return None, None
+
+    # Optional threshold override: re-derive bout-level pr1 from pr1_probs
+    # using a caller-supplied τ before the segment pipeline computes the
+    # hurdle gate.  Tech spec §5.3.2 uses τ=0.6 (rounded from F1-maximizing
+    # τ=0.62 in Figure 10) on the LOSO-pooled curve.  ``pr1_probs`` is
+    # always per-segment in the CSV (broadcast to every frame in the
+    # segment by train_scratch.run_model's merge), so this overwrite is
+    # safe to do at frame level.
+    if pr1_threshold is not None:
+        if 'pr1_probs' not in dfp.columns:
+            print(f"  [paper] {variant_label!r}: no pr1_probs column — "
+                  f"cannot apply --pr1_threshold; keeping CSV's pr1")
+        else:
+            dfp['pr1'] = (dfp['pr1_probs'] >= float(pr1_threshold)).astype(int)
 
     # Mirror the segment-level derived columns from main() *exactly* so the
     # paper table numbers match what teammates compute via get_metrics + the
@@ -369,7 +391,8 @@ def to_latex_main_results(df, out_path):
 
 
 def generate_paper_tables(variants, folder_path, df_rest, out_dir,
-                          full_label='Full', table_kind='ablation'):
+                          full_label='Full', table_kind='ablation',
+                          pr1_threshold=None):
     """Build a paper-ready table from {variant_label: output_name} dict.
 
     Args:
@@ -393,10 +416,14 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
     os.makedirs(out_dir, exist_ok=True)
     summary_rows = []
     per_fold_dict = {}
+    if pr1_threshold is not None:
+        print(f"[paper] applying pr1 threshold τ={pr1_threshold} "
+              f"to every variant (tech spec §5.3.2 uses τ=0.6).")
     for label, model_name in variants.items():
         print(f"\n[paper] variant={label!r}  output={model_name!r}")
         summary, per_fold = build_variant_results(
             label, model_name, folder_path, df_rest,
+            pr1_threshold=pr1_threshold,
         )
         if summary is None:
             continue
@@ -411,20 +438,26 @@ def generate_paper_tables(variants, folder_path, df_rest, out_dir,
         print("[paper] no variants produced metrics — nothing to write.")
         return None, per_fold_dict
 
+    # When a non-default τ is in play, suffix every output so a sweep of
+    # τ=0.5 vs τ=0.6 vs τ* lives side-by-side instead of overwriting.
+    suffix = ''
+    if pr1_threshold is not None:
+        suffix = f'_tau{int(round(pr1_threshold * 100)):02d}'
+
     summary_df = pd.DataFrame(summary_rows)
-    csv_path = os.path.join(out_dir, f'{table_kind}_table.csv')
+    csv_path = os.path.join(out_dir, f'{table_kind}_table{suffix}.csv')
     summary_df.to_csv(csv_path, index=False)
     print(f"[paper] summary CSV written to {csv_path}")
 
     # Optional per-fold dump for reproducibility and error-bar computation.
-    folds_path = os.path.join(out_dir, f'{table_kind}_per_fold.csv')
+    folds_path = os.path.join(out_dir, f'{table_kind}_per_fold{suffix}.csv')
     pd.concat(
         [df.assign(variant=label) for label, df in per_fold_dict.items()],
         ignore_index=True,
     ).to_csv(folds_path, index=False)
     print(f"[paper] per-fold CSV written to {folds_path}")
 
-    tex_path = os.path.join(out_dir, f'{table_kind}_table.tex')
+    tex_path = os.path.join(out_dir, f'{table_kind}_table{suffix}.tex')
     if table_kind == 'ablation':
         to_latex_ablation(summary_df, tex_path, full_label=full_label)
     elif table_kind == 'pretrain':
@@ -866,6 +899,13 @@ def main():
     parser.add_argument('--out_dir', type=str,
                         default='experiments/logs/paper_tables/',
                         help='Where CSV + LaTeX table snippets are written.')
+    parser.add_argument('--pr1_threshold', type=float, default=None,
+                        help='Re-derive bout-level pr1 from pr1_probs using '
+                             'this threshold instead of the CSV-default τ=0.5. '
+                             'Tech spec §5.3.2 uses τ=0.6 (F1-maximizing on '
+                             'the LOSO-pooled curve, Figure 10). '
+                             'Use evaluation/threshold_sweep.py to pick τ* '
+                             'before re-running with this flag.')
     cli_args, _ = parser.parse_known_args()
 
     if cli_args.mode == 'paper-ablation':
@@ -941,6 +981,7 @@ def run_paper_ablation(args):
         out_dir=args.out_dir,
         full_label='Ours (w/o pretrain)',  # ΔF1 reference row
         table_kind='ablation',
+        pr1_threshold=getattr(args, 'pr1_threshold', None),
     )
     if summary_df is not None:
         cols = ['variant', 'n_folds'] + [
@@ -988,6 +1029,7 @@ def run_paper_main_results(args):
         df_rest=None,
         out_dir=args.out_dir,
         table_kind='main',
+        pr1_threshold=getattr(args, 'pr1_threshold', None),
     )
     if summary_df is not None:
         cols = ['variant', 'n_folds'] + [

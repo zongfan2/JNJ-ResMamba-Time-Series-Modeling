@@ -1,0 +1,79 @@
+# =============================================================================
+# Deployment retrain — Xing et al. 2024 (MDPI Sensors), deep-learning arm
+# =============================================================================
+# All-NOPROD retrain (no held-out fold) for the production NS_production
+# pipeline.  Mirrors the LOSO config; the only meaningful difference is
+# ``training.train_all: true``, which skips CV and trains a single
+# ConvNormPool CNN on the full dataset.
+#
+# Performance: there is NO held-out estimate for the deployed artifact.
+# Report the matching LOSO numbers from Table 8 in the paper
+# (F1=51.37, P=58.43, R=45.83, AUROC=68.69, R²=−0.207, MAE=1.304) as the
+# expected production performance.
+#
+# IMPORTANT: this is the slowest deployment retrain — 200 epochs over
+# the FULL training pool of 3-s windows.  Expect multi-hour runtimes on
+# CPU; set ``num_gpu`` if a GPU is available (the CNN trains ~10× faster
+# there).  Resume isn't applicable to the all-data retrain (single
+# bundle, single fit), so this should run end-to-end in one job.
+#
+# Usage:
+#   python3.11 training/train_classical.py \
+#     --config experiments/configs/deployment/deploy_mdpi2024_cnn_all.yaml
+#
+# Output:
+#   /mnt/data/GENEActive-featurized/results/DL/<dataset>/deploy-mdpi2024_cnn-all-NOPROD/
+#     training/model_weights/mdpi2024_cnn_weights.joblib
+# Drop that file into NS_production/model/ to deploy.
+
+experiment:
+  name: deploy_mdpi2024_cnn_all
+  description: "Deployment retrain — ConvNormPool 1D CNN on ALL NOPROD."
+  task: scratch_detection
+  date: "2026-05-14"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: ""
+
+model:
+  architecture: mdpi2024_cnn
+  overrides:
+    # Encoder topology — paper values, identical to LOSO config.
+    hidden_size: 128
+    kernel_size: 5
+    pool_size: 2
+    num_blocks: 3
+    fc_dim: 128
+    dropout: 0.0
+    # Training recipe — paper values.
+    epochs: 200
+    batch_size: 16
+    learning_rate: 1.0e-3
+    weight_decay: 1.0e-3
+    lr_step: 10
+    lr_gamma: 0.1
+    focal_gamma: 2.0
+    random_state: 42
+
+training:
+  output: deploy-mdpi2024_cnn-all-NOPROD
+  execution_mode: train
+  train_all: true            # ← key knob: skip CV, retrain on full NOPROD
+  num_gpu: 0                 # bump to your GPU index when available
+
+# Paper-faithful 3-s sliding-window protocol (identical to LOSO config).
+windowing:
+  enabled: true
+  fs_hz: 20
+  win_seconds: 3.0
+  train_stride_seconds: 1.5
+  infer_stride_seconds: 3.0
+  label_min_scratch_seconds: 1.0
+  duration_estimator: count
+  min_pos_windows: 2
+
+reproducibility:
+  random_seed: 42
+  numpy_seed: 42

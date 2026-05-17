@@ -85,6 +85,14 @@ def parse_args():
                         "already exists in the predictions folder. Useful for "
                         "resuming an interrupted multi-fold run without "
                         "redoing completed work.")
+    p.add_argument("--train_all", action="store_true",
+                   help="Skip the CV loop and train a single model on the FULL "
+                        "dataset. Produces a deployable artifact at "
+                        "<models_folder>/<arch>_weights.joblib that drops "
+                        "straight into NS_production/model/. No held-out test "
+                        "predictions are written; CV-estimated performance "
+                        "should still be reported separately. May also be set "
+                        "via training.train_all in the YAML.")
     return p.parse_args()
 
 
@@ -586,6 +594,7 @@ def run_cv(cfg: dict, args) -> None:
         # ---- Standardize features (Xing 2024 paper step; safe for others) ----
         # Skip for the CNN: X_tr/X_te are raw [N, T, 3] tensors, not feature
         # matrices — feature-axis standardisation would be ill-defined.
+        feature_mu = feature_sd = None
         if arch != "mdpi2024_cnn" and bool(
             overrides.get("standardize_features", feature_set in ("tsfresh", "mdpi2024"))
         ):
@@ -594,6 +603,10 @@ def run_cv(cfg: dict, args) -> None:
             sd = np.where(sd < 1e-8, 1.0, sd)
             X_tr = ((X_tr - mu) / sd).astype(np.float32)
             X_te = ((X_te - mu) / sd).astype(np.float32)
+            # Persist so the production-time ClassicalBackend can reproduce
+            # the same train-fold standardisation without access to X_tr.
+            feature_mu = mu.astype(np.float32).reshape(-1)
+            feature_sd = sd.astype(np.float32).reshape(-1)
 
         # ---- Optional: DL-derived features (Paper 2) ----
         use_dl = bool(overrides.get("use_dl_features", False))
@@ -800,12 +813,20 @@ def run_cv(cfg: dict, args) -> None:
         out_df.to_csv(out_path, index=False)
 
         # ---- Persist models (small, cheap) ----
+        # Bundle layout is consumed by NS_production/Helpers/classical_backend.py
+        # at deployment time.  Anything required to reproduce inference must
+        # live here — that backend deliberately refuses to guess.
         joblib.dump(
             {
                 "clf": clf,
                 "reg": reg,
                 "feature_idx": keep,
                 "feature_names": feat_names,
+                "arch": arch,
+                "feature_set": feature_set,
+                "feature_mu": feature_mu,
+                "feature_sd": feature_sd,
+                "log_target": log_target,
                 "windowing": (
                     {
                         "win_seconds": win_seconds,
@@ -865,10 +886,331 @@ def run_cv(cfg: dict, args) -> None:
             print(f"  [warn] sanity metric failed: {exc}")
 
 
+def run_train_all(cfg: dict, args) -> None:
+    """Deployable all-data retrain — no held-out fold.
+
+    Mirrors the per-fold body of :func:`run_cv` but skips the CV groupby:
+    features are extracted from the full dataset, the classifier (and
+    optional duration regressor) are fit once, and the bundle is written to
+    ``<models_folder>/<arch>_weights.joblib`` — the production-ready
+    filename the ``NS_production`` pipeline looks up via ``--scratch_model
+    <arch>``.
+
+    No test-predictions CSV is written; in-sample sanity metrics are
+    printed with a clear IN-SAMPLE marker so they're not mistaken for
+    held-out performance.  For evaluation numbers, use the matching LOSO
+    config (e.g. ``ablation_baseline_<arch>.yaml``); that's the protocol
+    the paper reports against and the production model's expected
+    generalisation performance is *estimated* from those CV results.
+    """
+    data_cfg = cfg.get("data", {})
+    model_cfg = cfg.get("model", {})
+    train_cfg = cfg.get("training", {})
+
+    input_folder = data_cfg["input_folder"]
+    arch = model_cfg["architecture"]
+    overrides = model_cfg.get("overrides") or {}
+    output_name = train_cfg["output"]
+
+    # ---- Windowing config (Mahadevan 2021 / Ji 2023 / Xing 2024 protocol) ----
+    # Same defaults as run_cv; copied verbatim so the two entry points stay
+    # in lock-step.  Most deployments use the paper-faithful settings —
+    # 3-s windows, 1.5-s train stride, 3-s infer stride, count-rule pr3.
+    windowing_cfg = cfg.get("windowing", {}) or {}
+    is_windowed = bool(windowing_cfg.get("enabled", False))
+    fs_hz = int(windowing_cfg.get("fs_hz", 20))
+    win_seconds = float(windowing_cfg.get("win_seconds", 3.0))
+    train_stride_seconds = float(windowing_cfg.get("train_stride_seconds", 1.5))
+    infer_stride_seconds = float(windowing_cfg.get("infer_stride_seconds", 3.0))
+    label_min_scratch_seconds = float(windowing_cfg.get("label_min_scratch_seconds", 1.0))
+    duration_estimator = str(windowing_cfg.get("duration_estimator", "count")).lower()
+    if duration_estimator not in ("count", "regressor"):
+        raise ValueError(
+            f"windowing.duration_estimator must be 'count' or 'regressor' (got {duration_estimator!r})"
+        )
+    min_pos_windows = int(windowing_cfg.get("min_pos_windows", 1))
+
+    # ---- Output layout (no per-fold subfolders) ----
+    dataset_name = os.path.basename(input_folder.rstrip("/raw"))
+    results_folder = Path(
+        f"/mnt/data/GENEActive-featurized/results/DL/{dataset_name}/{output_name}/"
+    )
+    models_folder = results_folder / "training" / "model_weights"
+    logs_folder = results_folder / "training" / "training_logs"
+    create_folder([str(models_folder), str(logs_folder)])
+    bundle_path = models_folder / f"{arch}_weights.joblib"
+
+    rng = np.random.default_rng(int(overrides.get("random_state", 42)))
+    feat_names = feature_names()
+    feature_set = str(overrides.get("feature_set", "default")).lower()
+
+    print(f"\n[classical/train_all] arch={arch}  bundle→ {bundle_path}")
+    print(f"[classical/train_all] loading data from {input_folder}")
+    df = load_data(input_folder, filter_type=None)
+    n_bouts = df["segment"].nunique()
+    n_subj = df.get("PID", pd.Series(dtype=str)).nunique() if "PID" in df.columns else 0
+    print(f"[classical/train_all] {len(df)} frames across {n_bouts} bouts "
+          f"and {n_subj} subjects")
+
+    t0 = time.time()
+
+    # ---- Feature extraction (train side only — no held-out test) ----
+    if is_windowed:
+        print(f"  windowing: win={win_seconds}s, train_stride={train_stride_seconds}s, "
+              f"label_rule>{label_min_scratch_seconds}s")
+        Xw_tr, y_tr, dur_tr, seg_tr, _, _ = make_windows(
+            df, fs=fs_hz, win_seconds=win_seconds,
+            stride_seconds=train_stride_seconds,
+            label_min_scratch_seconds=label_min_scratch_seconds,
+        )
+        print(f"  produced {len(Xw_tr)} train windows from {n_bouts} bouts  "
+              f"(pos_rate={float(y_tr.mean()) if len(y_tr) else 0.0:.3f})")
+        # Stash subject lookup for the DL-feature OOF path (subject-grouped
+        # k-fold inside train_and_extract_dl_features — leak-free even on
+        # the full-data retrain).
+        _pid_by_seg_windowed = (
+            df.groupby("segment", sort=False, observed=True)["PID"].first().to_dict()
+        )
+
+        if arch == "mdpi2024_cnn":
+            X_tr = Xw_tr
+            feat_names_fold = []
+        elif feature_set in ("tsfresh", "mdpi2024"):
+            from baselines_classical.tsfresh_features import (
+                extract_tsfresh_features_from_windows,
+            )
+            ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))
+            ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
+            ts_progress = bool(overrides.get("tsfresh_progress", True))
+            ts_chunk = int(overrides.get("tsfresh_chunk_size", 50000))
+            X_tr, tsf_names = extract_tsfresh_features_from_windows(
+                Xw_tr, fs=fs_hz, n_jobs=ts_jobs, feature_set_type=ts_set,
+                disable_progressbar=not ts_progress,
+                chunk_size=ts_chunk,
+            )
+            feat_names_fold = tsf_names
+        else:
+            X_tr = extract_features_from_windows(Xw_tr, fs=fs_hz, hpf=True)
+            feat_names_fold = feature_names()
+        Xw_tr_raw = Xw_tr
+    else:
+        if feature_set in ("tsfresh", "mdpi2024"):
+            from baselines_classical.tsfresh_features import extract_tsfresh_features_batch
+            ts_jobs = int(overrides.get("tsfresh_n_jobs", -1))
+            ts_set = str(overrides.get("tsfresh_feature_set", "comprehensive")).lower()
+            ts_progress = bool(overrides.get("tsfresh_progress", True))
+            print(f"  extracting tsfresh features on {n_bouts} bouts ...")
+            X_tr, y_tr, dur_tr, seg_tr, tsf_names = extract_tsfresh_features_batch(
+                df,
+                n_jobs=ts_jobs,
+                feature_set_type=ts_set,
+                disable_progressbar=not ts_progress,
+            )
+            feat_names_fold = tsf_names
+        else:
+            print(f"  extracting features on {n_bouts} bouts ...")
+            X_tr, y_tr, dur_tr, seg_tr = extract_features_batch(df)
+            feat_names_fold = feat_names
+        Xw_tr_raw = None
+
+    if X_tr.size == 0:
+        raise RuntimeError("[classical/train_all] empty feature matrix — nothing to train on.")
+
+    # ---- Clean up NaNs ----
+    X_tr = np.nan_to_num(X_tr, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # ---- Standardise features (Xing 2024 paper step; persisted in bundle) ----
+    feature_mu = feature_sd = None
+    if arch != "mdpi2024_cnn" and bool(
+        overrides.get("standardize_features", feature_set in ("tsfresh", "mdpi2024"))
+    ):
+        mu = X_tr.mean(axis=0, keepdims=True)
+        sd = X_tr.std(axis=0, keepdims=True)
+        sd = np.where(sd < 1e-8, 1.0, sd)
+        X_tr = ((X_tr - mu) / sd).astype(np.float32)
+        feature_mu = mu.astype(np.float32).reshape(-1)
+        feature_sd = sd.astype(np.float32).reshape(-1)
+
+    # ---- Optional DL-derived features (Ji 2023 path) ----
+    use_dl = bool(overrides.get("use_dl_features", False))
+    if use_dl:
+        from baselines_classical.dl_features import train_and_extract_dl_features
+        try:
+            import torch as _torch
+            dl_device = "cuda" if _torch.cuda.is_available() else "cpu"
+        except ImportError:
+            dl_device = "cpu"
+        dl_epochs = int(overrides.get("dl_epochs", 30))
+        dl_bs = int(overrides.get("dl_batch_size", 128))
+        dl_lr = float(overrides.get("dl_learning_rate", 1e-3))
+        oof_folds = int(overrides.get("dl_oof_folds", 5))
+        if is_windowed:
+            raw_tr = Xw_tr_raw
+            raw_seg_tr = seg_tr
+        else:
+            dl_max_len = int(overrides.get("dl_max_len", 1200))
+            print(f"  [dl] extracting raw segments (max_len={dl_max_len}) for DL features on {dl_device} ...")
+            raw_tr, raw_seg_tr = extract_raw_segments_batch(df, max_len=dl_max_len)
+        if not np.array_equal(raw_seg_tr, seg_tr):
+            order = pd.Series(np.arange(len(raw_seg_tr)), index=raw_seg_tr).reindex(seg_tr).values
+            raw_tr = raw_tr[order]
+        if is_windowed:
+            pid_by_seg = _pid_by_seg_windowed
+        else:
+            pid_by_seg = df.groupby("segment", sort=False, observed=True)["PID"].first().to_dict()
+        groups_tr = np.asarray([pid_by_seg.get(s) for s in seg_tr])
+        # Empty raw_te → ask helper to skip the test-side feature extraction.
+        # train_and_extract_dl_features supports raw_te=None implicitly via
+        # the shape check; passing an empty [0, T, 3] tensor is the safe form.
+        empty_te = np.zeros((0,) + raw_tr.shape[1:], dtype=raw_tr.dtype)
+        dl_tr, _ = train_and_extract_dl_features(
+            raw_tr, y_tr.astype(np.int64), empty_te,
+            groups_tr=groups_tr,
+            oof_folds=oof_folds if oof_folds >= 2 else 0,
+            device=dl_device, epochs=dl_epochs,
+            batch_size=dl_bs, lr=dl_lr,
+            seed=int(overrides.get("random_state", 42)),
+            verbose=bool(overrides.get("dl_verbose", False)),
+        )
+        X_tr = np.concatenate([X_tr, dl_tr], axis=1).astype(np.float32)
+        print(f"  [dl] appended {dl_tr.shape[1]} DL features → X_tr {X_tr.shape}")
+
+    # ---- Balance classes (Mahadevan 2021 paper convention) ----
+    if arch == "mahadevan2021":
+        X_tr, y_tr, dur_tr, seg_tr = balance_classes(X_tr, y_tr, dur_tr, seg_tr, rng)
+        print(f"  balanced train set: n={len(y_tr)}  pos={int(y_tr.sum())}")
+
+    # ---- Feature selection (Mahadevan 2021 only) ----
+    if arch == "mahadevan2021":
+        target_n = int(overrides.get("num_features", 26))
+        keep = select_features_rfecv(X_tr, y_tr, target_n=target_n)
+        X_tr = X_tr[:, keep]
+        print(f"  selected {len(keep)} features")
+    elif arch == "mdpi2024_cnn":
+        keep = np.array([], dtype=np.int64)
+    else:
+        keep = np.arange(X_tr.shape[1])
+
+    # ---- Fit classifier ----
+    clf = build_classifier(arch, overrides)
+    clf_fit_kwargs = {}
+    if arch == "ji2023":
+        n_pos = max(1, int(y_tr.sum()))
+        n_neg = max(1, len(y_tr) - n_pos)
+        override_spw = overrides.get("scale_pos_weight")
+        spw = float(override_spw) if override_spw is not None else n_neg / n_pos
+        if hasattr(clf, "set_params") and "scale_pos_weight" in clf.get_params():
+            clf.set_params(scale_pos_weight=spw)
+            print(f"  ji2023 class re-weight: scale_pos_weight={spw:.3f}")
+        else:
+            clf_fit_kwargs["sample_weight"] = np.where(y_tr == 1, spw, 1.0)
+            print(f"  ji2023 class re-weight: sample_weight (pos×{spw:.3f})")
+    elif arch == "mdpi2024_fe":
+        n_pos = max(1, int(y_tr.sum()))
+        n_neg = max(1, len(y_tr) - n_pos)
+        override_spw = overrides.get("mdpi_pos_weight")
+        spw = float(override_spw) if override_spw is not None else n_neg / n_pos
+        clf_fit_kwargs["sample_weight"] = np.where(y_tr == 1, spw, 1.0)
+        print(f"  mdpi2024_fe class re-weight: sample_weight (pos×{spw:.3f})")
+    print(f"  fitting {type(clf).__name__} (classifier) ...")
+    clf.fit(X_tr, y_tr, **clf_fit_kwargs)
+
+    # ---- Fit duration regressor (skip when count-rule pr3) ----
+    hurdle = bool(overrides.get("reg_hurdle", True))
+    log_target = bool(overrides.get("reg_log_target", True))
+    train_regressor = (not is_windowed) or (duration_estimator == "regressor")
+
+    if train_regressor:
+        reg = build_regressor(arch, overrides)
+        if hurdle and (y_tr == 1).any():
+            pos_mask = (y_tr == 1)
+            X_reg = X_tr[pos_mask]
+            y_reg = dur_tr[pos_mask].astype(np.float32)
+            n_reg = int(pos_mask.sum())
+            unit = "windows" if is_windowed else "bouts"
+            print(f"  fitting {type(reg).__name__} (hurdle duration regressor) "
+                  f"on {n_reg} positive-only {unit}; log_target={log_target}")
+        else:
+            X_reg = X_tr
+            y_reg = dur_tr.astype(np.float32)
+            print(f"  fitting {type(reg).__name__} (duration regressor) "
+                  f"on {len(y_reg)} rows (hurdle disabled)")
+        y_fit = np.log1p(y_reg) if log_target else y_reg
+        reg.fit(X_reg, y_fit)
+    else:
+        reg = None
+        print(f"  skipping duration regressor (count-rule pr3)")
+
+    # ---- Persist the deployable bundle (production filename) ----
+    # Layout must match what NS_production/Helpers/classical_backend.py reads;
+    # the run_cv code path uses the same payload schema.
+    joblib.dump(
+        {
+            "clf": clf,
+            "reg": reg,
+            "feature_idx": keep,
+            "feature_names": feat_names,
+            "arch": arch,
+            "feature_set": feature_set,
+            "feature_mu": feature_mu,
+            "feature_sd": feature_sd,
+            "log_target": log_target,
+            "windowing": (
+                {
+                    "win_seconds": win_seconds,
+                    "infer_stride_seconds": infer_stride_seconds,
+                    "label_min_scratch_seconds": label_min_scratch_seconds,
+                    "duration_estimator": duration_estimator,
+                    "min_pos_windows": min_pos_windows,
+                }
+                if is_windowed
+                else None
+            ),
+        },
+        bundle_path,
+    )
+
+    # ---- In-sample sanity check (clearly labelled — DO NOT report) ----
+    try:
+        from sklearn.metrics import f1_score, roc_auc_score
+        pr1_tr = clf.predict(X_tr).astype(int)
+        pr1p_tr = (
+            clf.predict_proba(X_tr)[:, 1] if hasattr(clf, "predict_proba") else pr1_tr.astype(float)
+        )
+        f1 = f1_score(y_tr, pr1_tr, zero_division=0)
+        auc = roc_auc_score(y_tr, pr1p_tr) if len(set(y_tr)) > 1 else float("nan")
+        unit = "windows" if is_windowed else "bouts"
+        print(
+            f"  IN-SAMPLE F1={f1*100:.2f}  AUROC={auc*100:.2f}  "
+            f"n_train_{unit}={len(y_tr)}  pos_rate={y_tr.mean():.3f}  "
+            f"elapsed={time.time()-t0:.1f}s"
+        )
+        print(f"  ⚠ in-sample metrics are NOT held-out — report LOSO CV "
+              f"numbers (see ablation_baseline_{arch}.yaml) instead.")
+        with open(logs_folder / f"sanity_train_all.txt", "w") as fp:
+            fp.write(
+                f"arch={arch} IN_SAMPLE_F1={f1*100:.3f} IN_SAMPLE_AUROC={auc*100:.3f} "
+                f"n_train_{unit}={len(y_tr)}\n"
+            )
+    except Exception as exc:
+        print(f"  [warn] in-sample sanity metric failed: {exc}")
+
+    print(f"\n[classical/train_all] ✓ bundle written: {bundle_path}")
+    print(f"[classical/train_all] deploy with:")
+    print(f"    cp {bundle_path} NS_production/model/{arch}_weights.joblib")
+    print(f"    python3.11 NS_production/NS-pipeline.py ... \\")
+    print(f"        --scratch --scratch_model {arch}")
+
+
 def main():
     args = parse_args()
     cfg = load_config(args.config)
-    run_cv(cfg, args)
+    train_cfg = cfg.get("training", {}) or {}
+    train_all = bool(args.train_all or train_cfg.get("train_all", False))
+    if train_all:
+        run_train_all(cfg, args)
+    else:
+        run_cv(cfg, args)
 
 
 if __name__ == "__main__":

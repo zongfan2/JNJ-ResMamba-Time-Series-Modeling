@@ -1,0 +1,68 @@
+# =============================================================================
+# Deployment retrain — Mahadevan et al. 2021 (npj Digital Medicine), RandomForest
+# =============================================================================
+# All-NOPROD retrain (no held-out fold) for the production NS_production
+# pipeline.  Reuses the LOSO config's hyperparameters verbatim; the only
+# meaningful difference is ``training.train_all: true``, which skips the
+# CV loop and trains one model on the full dataset.
+#
+# Performance: there is NO held-out estimate for the deployed artifact.
+# Report the matching LOSO numbers from Table 8 in the paper
+# (F1=53.03, P=52.31, R=53.77, AUROC=69.69, R²=−0.849, MAE=1.964) as the
+# expected production performance, plus the standard "deployed model
+# trained on the full NOPROD cohort; performance estimated via LOSO CV"
+# disclaimer.
+#
+# Usage:
+#   python3.11 training/train_classical.py \
+#     --config experiments/configs/deployment/deploy_mahadevan2021_all.yaml
+#
+# Output:
+#   /mnt/data/GENEActive-featurized/results/DL/<dataset>/deploy-mahadevan2021-all-NOPROD/
+#     training/model_weights/mahadevan2021_weights.joblib
+# Drop that file into NS_production/model/ to deploy.
+
+experiment:
+  name: deploy_mahadevan2021_all
+  description: "Deployment retrain — RandomForest (50 trees) + 26-of-36 RFECV-selected features on ALL NOPROD."
+  task: scratch_detection
+  date: "2026-05-14"
+
+data:
+  input_folder: /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+  format: folder
+  scaler_path: ""
+
+model:
+  architecture: mahadevan2021
+  overrides:
+    # RandomForest classifier — paper values, identical to the LOSO config.
+    n_estimators: 50
+    max_depth: -1
+    min_samples_leaf: 1
+    max_features: sqrt
+    num_features: 26
+    random_state: 42
+    reg_hurdle: true
+    reg_log_target: true
+
+training:
+  output: deploy-mahadevan2021-all-NOPROD
+  execution_mode: train
+  train_all: true            # ← key knob: skip CV, retrain on full NOPROD
+  num_gpu: 0
+
+# Paper-faithful 3-s sliding-window protocol (identical to LOSO config).
+windowing:
+  enabled: true
+  fs_hz: 20
+  win_seconds: 3.0
+  train_stride_seconds: 1.5
+  infer_stride_seconds: 3.0
+  label_min_scratch_seconds: 1.0
+  duration_estimator: count
+  min_pos_windows: 2
+
+reproducibility:
+  random_seed: 42
+  numpy_seed: 42

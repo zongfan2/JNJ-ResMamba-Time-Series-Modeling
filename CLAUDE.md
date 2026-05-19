@@ -96,11 +96,26 @@ project/
 ├── utils/               # Shared utilities
 │   └── common.py        # EarlyStopping, learning rate schedulers, file utilities
 │
-├── Helpers/             # Legacy backward-compatibility layer
-│   ├── DL_models.py     # Original monolithic file (preserved for reference)
-│   ├── DL_helpers.py    # Original monolithic file (preserved for reference)
-│   ├── DL_models_shim.py  # Re-exports from models/ for backward compatibility
-│   └── DL_helpers_shim.py # Re-exports from data/losses/evaluation/ for backward compatibility
+├── Helpers/             # Legacy modules — still imported by legacy/ scripts only
+│   ├── DL_models.py     # Original monolithic models file (kept for legacy/ scripts)
+│   ├── DL_helpers.py    # Original monolithic helpers file (kept for legacy/ scripts)
+│   ├── dlrtc_losses.py  # DLRTC loss functions used by legacy/ TSO DLRTC trainer
+│   └── net/             # 3 remaining modules still imported by legacy/pretrain.py
+│       ├── pretrainer.py            # AIM/DINO/RelCon/SimCLR pretrainer classes
+│       ├── dataparallel_pretrainer.py
+│       └── embed.py                 # PatchEmbedWithPos1D used by DL_models.py
+│
+├── legacy/              # Deprecated root-level scripts (moved 2026-05-18)
+│   ├── README.md        # Migration map: each old script → new training/ path
+│   ├── predict_scratch_segment.py        # → training/train_scratch.py
+│   ├── predict_scratch_segment_h5.py     # → training/train_scratch_h5.py
+│   ├── predict_TSO_segment.py            # → training/train_tso.py
+│   ├── predict_TSO_segment_patch.py      # → training/train_tso_patch.py
+│   ├── predict_TSO_segment_patch_h5.py   # → training/train_tso_patch_h5.py
+│   ├── predict_TSO_segment_patch_dlrtc.py # → training/train_tso_dlrtc.py
+│   ├── predict_TSO_segment_patch_ray.py  # → training/train_tso_patch.py (no Ray replacement)
+│   ├── pretrain.py                       # → training/pretrain.py
+│   └── convert_parquet_to_h5.py          # → training/convert_h5.py
 │
 ├── tests/               # Unit and integration tests
 ├── requirement-ml.txt   # Python dependencies
@@ -377,11 +392,22 @@ from Helpers.DL_helpers import load_h5, compute_f1
 
 ### Training Script Evolution
 
-| Old | New |
-|---|---|
-| `predict_scratch_segment_h5.py` | `training/train_scratch.py` |
-| `predict_scratch_segment.py` | `training/train_scratch.py` (with `--format csv`) |
-| `Helpers/net/prepare_data.py` | `data/prepare_data.py` |
+All root-level scripts listed in the "Old" column were moved to `legacy/` on
+2026-05-18 and carry a deprecation banner. The "New" column is the canonical
+path for all new work.
+
+| Old (now under `legacy/`)                       | New (canonical)                       |
+|-------------------------------------------------|---------------------------------------|
+| `legacy/predict_scratch_segment.py`             | `training/train_scratch.py` (`--format csv`) |
+| `legacy/predict_scratch_segment_h5.py`          | `training/train_scratch_h5.py`        |
+| `legacy/predict_TSO_segment.py`                 | `training/train_tso.py`               |
+| `legacy/predict_TSO_segment_patch.py`           | `training/train_tso_patch.py`         |
+| `legacy/predict_TSO_segment_patch_h5.py`        | `training/train_tso_patch_h5.py`      |
+| `legacy/predict_TSO_segment_patch_dlrtc.py`     | `training/train_tso_dlrtc.py`         |
+| `legacy/predict_TSO_segment_patch_ray.py`       | *(no Ray-specific replacement)*       |
+| `legacy/pretrain.py`                            | `training/pretrain.py`                |
+| `legacy/convert_parquet_to_h5.py`               | `training/convert_h5.py`              |
+| `Helpers/net/prepare_data.py` *(deleted)*       | `data/prepare_data.py`                |
 | Inline config dicts | `experiments/configs/` YAML files |
 
 ## Troubleshooting Guide

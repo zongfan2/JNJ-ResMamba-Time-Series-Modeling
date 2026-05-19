@@ -1,4 +1,32 @@
 # -*- coding: utf-8 -*-
+# =============================================================================
+# ⚠ DEPRECATED — moved to legacy/ on 2026-05-18.
+#
+# This script has been superseded by:
+#     training/pretrain.py
+#
+# The replacement lives under the modular `training/` tree and uses the new
+# `models/`, `data/`, `losses/`, `evaluation/`, and `utils/` packages instead
+# of the monolithic `Helpers/DL_models.py` / `Helpers/DL_helpers.py`.  See
+# `training/README.md` and `training/ORGANIZATION_SUMMARY.md` for the
+# migration map.
+#
+# This copy is preserved for historical reference and one-off reruns of
+# completed jobs.  New work should target the new file.
+#
+# If you must run this file, invoke from the repository root.  The
+# sys.path insert below keeps `Helpers/...` imports resolvable now that
+# this script lives one level deeper than before.
+# =============================================================================
+import os as _legacy_os
+import sys as _legacy_sys
+_REPO_ROOT = _legacy_os.path.abspath(
+    _legacy_os.path.join(_legacy_os.path.dirname(__file__), _legacy_os.pardir)
+)
+if _REPO_ROOT not in _legacy_sys.path:
+    _legacy_sys.path.insert(0, _REPO_ROOT)
+# ----- Original script body follows -----
+
 """
 Created on Tue Sep 24 11:19:50 2024
 

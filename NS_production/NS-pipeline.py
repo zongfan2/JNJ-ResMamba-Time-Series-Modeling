@@ -752,7 +752,13 @@ def process_file(data,PID,wrist,i,size,GT_df,args,model,device,batch_size):
                         staud[c]=0
                 staud['mvpa']= staud.moderate+staud.vigorous 
 
-                processed_file=os.path.join(target_folder_analytics, "Minute_Summary_" + tracker+"_"+str(DATE).split(" ")[0]+".parquet.gzip")
+                # Land the per-minute activity-level summary under the
+                # dedicated ``analytics/activity/`` subfolder rather than the
+                # parent ``analytics/`` directory.  The subfolder was created
+                # at startup (line 125) but no code path actually wrote to it
+                # before this fix, leaving it empty in every run regardless
+                # of flags.
+                processed_file=os.path.join(target_folder_analytics_activity, "Minute_Summary_" + tracker+"_"+str(DATE).split(" ")[0]+".parquet.gzip")
                 staud.to_parquet(processed_file,index=False)
 
             del df

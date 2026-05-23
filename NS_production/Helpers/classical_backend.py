@@ -25,12 +25,23 @@ import joblib
 import numpy as np
 import pandas as pd
 
-# Make ``baselines_classical`` importable when this module is loaded from
-# inside ``NS_production/Helpers``.  The production tree ships its own copy
-# of the package next to this file.
-_PRODUCTION_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-if _PRODUCTION_ROOT not in sys.path:
-    sys.path.insert(0, _PRODUCTION_ROOT)
+# Make ``baselines_classical`` importable as a TOP-LEVEL name even though
+# the package now lives at ``Helpers/baselines_classical/`` (it was moved
+# in 2026-05-18).  Two reasons we keep the top-level alias rather than
+# switching to ``from Helpers.baselines_classical.X import ...``:
+#
+#   1. joblib bundles pickled by training/train_classical.py reference
+#      ``baselines_classical.cnn_classifier.WindowedCNNClassifier`` by its
+#      full dotted module path.  Pickle resolves that string against
+#      sys.modules at load time, so the name must point at the same
+#      package the bundle was trained against — otherwise unpickling
+#      breaks with ``ModuleNotFoundError: baselines_classical``.
+#   2. Keeps this file portable: the research tree's top-level
+#      ``baselines_classical/`` and the production copy stay
+#      interchangeable, so a bundle trained anywhere drops in.
+_HELPERS_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _HELPERS_ROOT not in sys.path:
+    sys.path.insert(0, _HELPERS_ROOT)
 
 from baselines_classical.features import (  # noqa: E402
     extract_features,

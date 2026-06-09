@@ -660,3 +660,28 @@ python predict_TSO_segment_patch_dlrtc.py \
 5. **Production**: Use Domino for managed, auto-scaling training
 
 See `project_overview.md` for training concepts and `algorithms.md` for post-processing.
+
+## Deep TSO Noisy-Label Domino Jobs
+
+Full Deep TSO experiments are intended to run on Domino because the local machine does not have the required training data and GPU/runtime stack.
+
+Smoke test:
+
+```bash
+export INPUT_H5=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+export OUTPUT_ROOT=/mnt/data/GENEActive-featurized/results/DL
+bash experiments/domino/deep_tso_setup.sh
+bash experiments/domino/run_deep_tso_smoke.sh
+```
+
+Ablation:
+
+```bash
+export INPUT_H5=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+export SPLIT_FILE=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+export OUTPUT_ROOT=/mnt/data/GENEActive-featurized/results/DL
+bash experiments/domino/deep_tso_setup.sh
+bash experiments/domino/run_deep_tso_ablation.sh
+```
+
+Use the smoke job after every code change. Use the ablation job after the smoke job passes.

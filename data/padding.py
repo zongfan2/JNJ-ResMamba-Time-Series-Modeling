@@ -591,6 +591,8 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
         segments_batch.append({
             'segment': sample['segment'],
             'segment_id': sample.get('segment_id', int(idx)),
+            'subject': sample.get('subject'),
+            'subject_index': sample.get('subject_index'),
         })
         if "Y_annotators" in sample:
             has_annotators = True

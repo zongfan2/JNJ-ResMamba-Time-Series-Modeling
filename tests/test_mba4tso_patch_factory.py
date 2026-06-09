@@ -27,3 +27,31 @@ def test_setup_model_creates_mba4tso_patch_and_forward_returns_logits():
     lengths = torch.tensor([8, 6])
     logits = model(x, lengths)
     assert logits.shape == (2, 8, 1)
+
+
+def test_mba4tso_patch_can_return_projection_embedding():
+    from models.setup import setup_model
+
+    params = {
+        "batch_size": 2,
+        "num_filters": 16,
+        "dropout": 0.1,
+        "droppath": 0.1,
+        "kernel_f": 3,
+        "kernel_MBA": 3,
+        "num_feature_layers": 1,
+        "blocks_MBA": 1,
+        "featurelayer": "ResNet",
+        "patch_size": 60,
+        "patch_channels": 6,
+        "projection_dim": 12,
+        "norm1": "BN",
+        "norm2": "GN",
+        "output_channels": 1,
+        "skip_connect": True,
+        "skip_cross_attention": False,
+    }
+    model = setup_model("mba4tso_patch", None, 8, params, pretraining=False, num_classes=1)
+    logits, embedding = model(torch.randn(2, 8, 60, 6), torch.tensor([8, 8]), return_embedding=True)
+    assert logits.shape == (2, 8, 1)
+    assert embedding.shape == (2, 12)

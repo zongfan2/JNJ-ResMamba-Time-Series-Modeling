@@ -22,6 +22,7 @@ import os
 import sys
 import argparse
 import joblib
+from collections import defaultdict
 import numpy as np
 import pandas as pd
 import torch
@@ -45,6 +46,7 @@ from losses import (
     measure_loss_tso_with_continuity,
     # Structural priors and noisy-label regularizers (Deep TSO).
     measure_loss_tso_structural,
+    SupConLossV2,
     ELRMemory,
     CircadianPriorBias,
     hour_from_time_channels,
@@ -107,6 +109,17 @@ class H5Dataset:
         self.subject_ids = self.h5f["subject_ids"][:] if "subject_ids" in self.h5f else None
         self.Y_annotators = self.h5f["Y_annotators"] if "Y_annotators" in self.h5f else None
 
+        subjects = []
+        for idx in self.indices:
+            if self.subject_ids is not None:
+                subjects.append(_decode_h5_string(self.subject_ids[idx]))
+            else:
+                subjects.append(_subject_from_segment_name(self.segment_names[idx]))
+        self.subject_to_index = {subject: i for i, subject in enumerate(sorted(set(subjects)))}
+        # Per-position subject string (aligned with __getitem__ ordering) so the
+        # subject-grouped batch generator can group nights without loading X.
+        self.subjects = subjects
+
     def __len__(self):
         return len(self.indices)
 
@@ -131,6 +144,7 @@ class H5Dataset:
             "segment": segment_name,
             "segment_id": int(actual_idx),
             "subject": subject,
+            "subject_index": self.subject_to_index[subject],
         }
         if self.Y_annotators is not None:
             sample["Y_annotators"] = self.Y_annotators[actual_idx]
@@ -162,6 +176,35 @@ def batch_generator_h5(dataset, batch_size, shuffle=False):
     for start_idx in range(0, len(indices), batch_size):
         batch_indices = indices[start_idx:start_idx + batch_size]
         yield batch_indices
+
+
+def subject_grouped_batch_generator(dataset, batch_size, nights_per_group=4):
+    """Yield batches that keep same-subject nights together so the cross-night
+    SupCon objective has positive pairs. Each night is emitted once per epoch.
+
+    Plain random batching almost never co-locates multiple nights of one
+    subject, so SupCon would otherwise see zero positives and contribute nothing.
+    """
+    by_subject = defaultdict(list)
+    for pos in range(len(dataset)):
+        by_subject[dataset.subjects[pos]].append(pos)
+
+    groups = []
+    for positions in by_subject.values():
+        positions = list(positions)
+        np.random.shuffle(positions)
+        for start in range(0, len(positions), nights_per_group):
+            groups.append(positions[start:start + nights_per_group])
+    np.random.shuffle(groups)
+
+    batch = []
+    for group in groups:
+        if batch and len(batch) + len(group) > batch_size:
+            yield np.array(batch, dtype=np.int64)
+            batch = []
+        batch.extend(group)
+    if batch:
+        yield np.array(batch, dtype=np.int64)
 
 
 # ==================== Visualization Function ====================
@@ -310,6 +353,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     w_dur=0.0, dur_min=3.0, dur_max=11.0,
                     boundary_tau_steps=0.0,
                     circadian_bias=None,
+                    base_loss="ce", gce_q=0.7,
+                    w_supcon=0.0, supcon_temperature=0.07,
                     patch_duration_hours=None):
     """
     Run model on H5 dataset for one epoch.
@@ -355,7 +400,11 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     all_labels_other = []
     all_labels_nonwear = []
 
-    for batch_indices in batch_generator_h5(dataset, batch_size=batch_size, shuffle=train_mode):
+    if w_supcon > 0 and train_mode:
+        batch_iter = subject_grouped_batch_generator(dataset, batch_size)
+    else:
+        batch_iter = batch_generator_h5(dataset, batch_size=batch_size, shuffle=train_mode)
+    for batch_indices in batch_iter:
         t1 = time.time()
 
         # Prepare batch
@@ -372,7 +421,11 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         #     print(f"First batch loading time: {load_time:.4f}s")
 
         # Forward pass
-        outputs = model(pad_X, x_lens)
+        if w_supcon > 0 and train_mode:
+            outputs, embedding = model(pad_X, x_lens, return_embedding=True)
+        else:
+            outputs = model(pad_X, x_lens)
+            embedding = None
 
         # Visualize if requested
         if visualize_batch and output_folder is not None and batches == 0:
@@ -404,6 +457,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             ])
             boundary_weight = torch.from_numpy(bw).to(device)
 
+        supervision_weight = None
+
         # --- ELR target lookup (per-segment EMA of past predictions) -------
         elr_target = None
         if w_elr > 0 and elr_memory is not None:
@@ -415,13 +470,18 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
 
         # --- Calculate loss -----------------------------------------------
         use_structural = (
-            w_trans > 0 or w_dur > 0 or w_elr > 0 or boundary_weight is not None
+            base_loss != "ce"
+            or supervision_weight is not None
+            or w_trans > 0 or w_dur > 0 or w_elr > 0
+            or boundary_weight is not None
         )
         if use_structural:
             loss_dict = measure_loss_tso_structural(
                 outputs, pad_Y, x_lens,
                 patch_duration_hours=patch_duration_hours,
                 boundary_weight=boundary_weight,
+                supervision_weight=supervision_weight,
+                base_loss=base_loss, gce_q=gce_q,
                 w_trans=w_trans, w_dur=w_dur, w_elr=w_elr,
                 trans_budget=trans_budget, dur_min=dur_min, dur_max=dur_max,
                 elr_target=elr_target,
@@ -441,6 +501,19 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             epoch_cont_loss += cont_loss.item()
         else:
             total_loss = measure_loss_tso(outputs, pad_Y, x_lens)
+
+        if w_supcon > 0 and train_mode and embedding is not None:
+            subject_indices = torch.tensor(
+                [s["subject_index"] for s in batch_samples],
+                dtype=torch.long,
+                device=device,
+            )
+            # SupCon needs at least one subject with >= 2 nights in the batch;
+            # otherwise it has no positive pairs and is undefined/unstable.
+            _, subject_counts = torch.unique(subject_indices, return_counts=True)
+            if (subject_counts >= 2).any():
+                supcon_loss = SupConLossV2(temperature=supcon_temperature)(embedding, subject_indices)
+                total_loss = total_loss + w_supcon * supcon_loss
 
         # Backward pass if training
         if train_mode:
@@ -664,6 +737,17 @@ parser.add_argument('--circadian_smooth_sigma', type=float, default=1.0,
 parser.add_argument('--finetune_lr', type=float, default=None,
                    help='Learning rate for fine-tuning (lower than training from scratch). If not set, uses best_params["lr"]')
 
+parser.add_argument("--base_loss", type=str, default="ce", choices=["ce", "gce"],
+                    help="Base supervised loss for TSO.")
+parser.add_argument("--gce_q", type=float, default=0.7,
+                    help="GCE q parameter when --base_loss=gce.")
+parser.add_argument("--w_supcon", type=float, default=0.0,
+                    help="Weight for cross-night supervised contrastive loss.")
+parser.add_argument("--supcon_temperature", type=float, default=0.07,
+                    help="Temperature for SupConLossV2.")
+parser.add_argument("--projection_dim", type=int, default=128,
+                    help="Projection dimension for the TSO night embedding head.")
+
 args = parser.parse_args()
 
 # ==================== Setup ====================
@@ -726,7 +810,8 @@ best_params = {
     'skip_cross_attention': True,
     'use_scaler': False,
     'pretrained_model_path': args.pretrained_model,
-    'freeze_layers': args.freeze_layers
+    'freeze_layers': args.freeze_layers,
+    "projection_dim": args.projection_dim,
 }
 
 print("Model hyperparameters:")
@@ -1001,6 +1086,10 @@ for iteration in range(args.training_iterations):
                 w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
                 boundary_tau_steps=args.boundary_tau_steps,
                 circadian_bias=circadian_bias,
+                base_loss=args.base_loss,
+                gce_q=args.gce_q,
+                w_supcon=args.w_supcon,
+                supcon_temperature=args.supcon_temperature,
                 patch_duration_hours=patch_duration_hours,
             )
             print("Time cost for training: ", time.time()-t1)
@@ -1047,6 +1136,10 @@ for iteration in range(args.training_iterations):
                         w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
                         boundary_tau_steps=args.boundary_tau_steps,
                         circadian_bias=circadian_bias,
+                        base_loss=args.base_loss,
+                        gce_q=args.gce_q,
+                        w_supcon=0.0,
+                        supcon_temperature=args.supcon_temperature,
                         patch_duration_hours=patch_duration_hours,
                     )
 
@@ -1124,6 +1217,10 @@ for iteration in range(args.training_iterations):
             w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
             boundary_tau_steps=args.boundary_tau_steps,
             circadian_bias=circadian_bias,
+            base_loss=args.base_loss,
+            gce_q=args.gce_q,
+            w_supcon=0.0,
+            supcon_temperature=args.supcon_temperature,
             patch_duration_hours=patch_duration_hours,
         )
 

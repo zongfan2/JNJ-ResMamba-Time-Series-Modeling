@@ -294,6 +294,7 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
             output_channels = best_params.get("output_channels", 3)
             skip_connect = best_params.get("skip_connect", True)
             skip_cross_attention = best_params.get("skip_cross_attention", False)
+            projection_dim = best_params.get("projection_dim", 128)
             model = MBA4TSO_Patch(
                 patch_size=patch_size,
                 patch_channels=patch_channels,
@@ -311,6 +312,7 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                 output_channels=output_channels,
                 skip_connect=skip_connect,
                 skip_cross_attention=skip_cross_attention,
+                projection_dim=projection_dim,
             )
         case "mbatsmed":
             model = MBA_tsm_ED(

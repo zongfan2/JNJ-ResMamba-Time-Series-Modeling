@@ -21,6 +21,8 @@ from .postprocessing import (
     seq_to_seconds,
 )
 
+from .tso_validation import extract_tso_interval, cross_night_consistency
+
 __all__ = [
     # Metrics
     'calculate_metrics_nn',
@@ -36,4 +38,7 @@ __all__ = [
     'batch_enforce_single_tso',
     'remove_padding',
     'seq_to_seconds',
+    # TSO validation (label-free)
+    'extract_tso_interval',
+    'cross_night_consistency',
 ]

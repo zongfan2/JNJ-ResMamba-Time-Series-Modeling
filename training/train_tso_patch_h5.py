@@ -61,6 +61,7 @@ from evaluation.postprocessing import batch_enforce_single_tso
 from losses.standard import EarlyStopping
 from evaluation.metrics import calculate_metrics_nn, plot_tso_learning_curves
 from evaluation.postprocessing import smooth_predictions, smooth_predictions_combined
+from evaluation.tso_validation import extract_tso_interval, cross_night_consistency
 
 
 # ==================== H5 Dataset Class ====================
@@ -402,6 +403,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     all_preds_nonwear = []
     all_labels_other = []
     all_labels_nonwear = []
+    # Per-sample label-free TSO interval records (onset/offset/duration/segments).
+    interval_records = []
 
     if w_supcon > 0 and train_mode:
         batch_iter = subject_grouped_batch_generator(dataset, batch_size)
@@ -598,6 +601,17 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             valid_len = int(x_lens[i])
             valid_preds = preds[i, :valid_len, :]
             valid_labels = labels[i, :valid_len]
+
+            # Label-free TSO interval extraction (per night, predicted classes only).
+            if num_out_channels == 1:
+                pred_seq = (valid_preds[:, 0] > 0.5).astype(int)
+            else:
+                pred_seq = np.argmax(valid_preds, axis=1)
+            interval = extract_tso_interval(pred_seq, timestep_minutes=1.0)
+            interval["segment"] = _decode_h5_string(batch_samples[i]["segment"])
+            interval["subject"] = batch_samples[i]["subject"]
+            interval_records.append(interval)
+
             valid_mask = valid_labels >= 0  # exclude padding (-100)
 
             if num_out_channels == 1:
@@ -680,6 +694,15 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             'labels_nonwear': all_labels_nonwear,
             'labels_tso': all_labels_tso
         }
+
+    if interval_records:
+        consistency = cross_night_consistency(interval_records)
+        metrics.update({
+            "mean_pred_tso_duration_hours": float(np.nanmean([x["duration_hours"] for x in interval_records])),
+            "mean_pred_tso_segment_count": float(np.nanmean([x["segment_count"] for x in interval_records])),
+            **consistency,
+        })
+    predictions["interval_records"] = interval_records
 
     if verbose:
         extra = "" if num_out_channels == 1 else (
@@ -1096,6 +1119,7 @@ for iteration in range(args.training_iterations):
         'train_accuracy': [], 'val_accuracy': [],
         'train_f1_avg': [], 'val_f1_avg': [],
         'train_f1_tso': [], 'val_f1_tso': [],
+        'val_selection_score': [],
     }
     if best_params['output_channels'] == 3:
         history.update({'train_f1_other': [], 'train_f1_nonwear': [],
@@ -1219,10 +1243,20 @@ for iteration in range(args.training_iterations):
                         patch_duration_hours=patch_duration_hours,
                     )
 
+                # NOTE: selection_score is a label-free-leaning robustness gate,
+                # not a TSO-accuracy metric — val loss is still vs. noisy labels.
+                selection_score = (
+                    val_metrics["loss"]
+                    + 0.05 * val_metrics.get("mean_pred_tso_segment_count", 0.0)
+                    + 0.05 * abs(val_metrics.get("mean_pred_tso_duration_hours", 7.0) - 7.0)
+                )
+                val_metrics["selection_score"] = selection_score
+
                 history['val_loss'].append(val_metrics['loss'])
                 history['val_accuracy'].append(val_metrics['accuracy'])
                 history['val_f1_avg'].append(val_metrics['f1_avg'])
                 history['val_f1_tso'].append(val_metrics['f1_tso'])
+                history["val_selection_score"].append(selection_score)
                 if best_params['output_channels'] == 3:
                     history['val_f1_other'].append(val_metrics['f1_other'])
                     history['val_f1_nonwear'].append(val_metrics['f1_nonwear'])
@@ -1234,14 +1268,14 @@ for iteration in range(args.training_iterations):
                 else:
                     print(f"  Val   - Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.4f}, F1 avg: {val_metrics['f1_avg']:.4f}")
 
-                # Early stopping check
-                early_stopping(val_metrics['loss'], model)
+                # Early stopping check (uses label-free-leaning selection score).
+                early_stopping(selection_score, model)
                 if early_stopping.early_stop:
                     print("Early stopping triggered")
                     break
 
-            # Save best model
-            if val_metrics['loss'] == early_stopping.best_score:
+            # Save best model (best epoch is now defined by selection_score).
+            if selection_score == early_stopping.best_score:
                 model_path = os.path.join(train_models_folder,
                                         f"best_model_iter_{iteration}.pt")
                 model_to_save = model.module if isinstance(model, torch.nn.DataParallel) else model
@@ -1256,6 +1290,7 @@ for iteration in range(args.training_iterations):
                     'val_loss': val_metrics['loss'],
                     'val_accuracy': val_metrics['accuracy'],
                     'val_f1_avg': val_metrics['f1_avg'],
+                    'val_selection_score': selection_score,
                     'history': history,
                     'best_params': best_params,
                     'num_gpus': num_gpus

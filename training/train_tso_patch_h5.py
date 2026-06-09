@@ -52,6 +52,7 @@ from losses import (
     CircadianPriorBias,
     hour_from_time_channels,
     compute_boundary_weights,
+    consensus_from_annotators,
 )
 from evaluation.postprocessing import batch_enforce_single_tso
 # Pre-existing utils imports were stale: EarlyStopping lives in losses/standard.py
@@ -356,6 +357,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     circadian_bias=None,
                     base_loss="ce", gce_q=0.7,
                     w_supcon=0.0, supcon_temperature=0.07,
+                    use_consensus_weight=False,
                     patch_duration_hours=None):
     """
     Run model on H5 dataset for one epoch.
@@ -459,6 +461,21 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             boundary_weight = torch.from_numpy(bw).to(device)
 
         supervision_weight = None
+        if use_consensus_weight:
+            if pad_Y_annotators is None:
+                raise ValueError("--use_consensus_weight requires Y_annotators in the H5 file")
+            # Capture masks BEFORE relabeling — consensus_labels has no -100.
+            padding_mask = pad_Y == -100
+            nonwear_mask = pad_Y == 1
+            consensus_labels, supervision_weight = consensus_from_annotators(
+                pad_Y_annotators, positive_class=2
+            )
+            keep_original = padding_mask | nonwear_mask
+            pad_Y = torch.where(keep_original, pad_Y, consensus_labels)
+            # Zero supervision on padded minutes using the ORIGINAL mask so GCE
+            # never trains on padding (pad_Y no longer contains -100 after the
+            # torch.where above).
+            supervision_weight = supervision_weight.masked_fill(padding_mask, 0.0)
 
         # --- ELR target lookup (per-segment EMA of past predictions) -------
         elr_target = None
@@ -746,6 +763,8 @@ parser.add_argument("--w_supcon", type=float, default=0.0,
                     help="Weight for cross-night supervised contrastive loss.")
 parser.add_argument("--supcon_temperature", type=float, default=0.07,
                     help="Temperature for SupConLossV2.")
+parser.add_argument("--use_consensus_weight", action="store_true",
+                    help="Use Y_annotators agreement as per-minute supervision confidence.")
 parser.add_argument("--projection_dim", type=int, default=128,
                     help="Projection dimension for the TSO night embedding head.")
 parser.add_argument("--config", type=str, default="", help="Path to YAML config file.")
@@ -1145,6 +1164,7 @@ for iteration in range(args.training_iterations):
                 gce_q=args.gce_q,
                 w_supcon=args.w_supcon,
                 supcon_temperature=args.supcon_temperature,
+                use_consensus_weight=args.use_consensus_weight,
                 patch_duration_hours=patch_duration_hours,
             )
             print("Time cost for training: ", time.time()-t1)
@@ -1195,6 +1215,7 @@ for iteration in range(args.training_iterations):
                         gce_q=args.gce_q,
                         w_supcon=0.0,
                         supcon_temperature=args.supcon_temperature,
+                        use_consensus_weight=args.use_consensus_weight,
                         patch_duration_hours=patch_duration_hours,
                     )
 
@@ -1276,6 +1297,7 @@ for iteration in range(args.training_iterations):
             gce_q=args.gce_q,
             w_supcon=0.0,
             supcon_temperature=args.supcon_temperature,
+            use_consensus_weight=args.use_consensus_weight,
             patch_duration_hours=patch_duration_hours,
         )
 

@@ -92,7 +92,14 @@ def generate_time_cyclic(timestamps, use_sincos=True):
         return time_sin.values
 
 
-def load_and_preprocess_segment(file, scaler, max_samples, samples_per_second=20, use_sincos=True):
+def load_and_preprocess_segment(
+    file,
+    scaler,
+    max_samples,
+    samples_per_second=20,
+    use_sincos=True,
+    annotator_columns=None,
+):
     """
     Load a single parquet file and preprocess it.
 
@@ -103,10 +110,13 @@ def load_and_preprocess_segment(file, scaler, max_samples, samples_per_second=20
         samples_per_second: Sampling rate (default 20Hz)
         use_sincos: If True, generate sin+cos time encoding (6 channels total).
                    If False, generate only sin (5 channels, backward compatible).
+        annotator_columns: Optional list of binary TSO label columns to extract
+                   as per-annotator tracks.
 
     Returns:
         dict with keys: x, y, z, temperature, time_sin, [time_cos], predictTSO,
-                       non_wear, segment, num_samples
+                       non_wear, segment, subject, num_samples,
+                       [annotators] (when annotator_columns is given)
     """
     try:
         # Parse filename
@@ -156,12 +166,22 @@ def load_and_preprocess_segment(file, scaler, max_samples, samples_per_second=20
             'predictTSO': df['predictTSO'].values.astype(np.int8) if 'predictTSO' in df.columns else np.zeros(len(df), dtype=np.int8),
             'non_wear': df['non-wear'].values.astype(np.int8) if 'non-wear' in df.columns else np.zeros(len(df), dtype=np.int8),
             'segment': segment_name,
+            'subject': current_subject,
             'num_samples': len(df)
         }
 
         # Add time_cos if using sin+cos encoding
         if use_sincos:
             result['time_cos'] = df['time_cos'].values.astype(np.float32)
+
+        annotator_columns = annotator_columns or []
+        annotator_tracks = []
+        for col in annotator_columns:
+            if col not in df.columns:
+                raise ValueError(f"Annotator column {col!r} not found in {file}")
+            annotator_tracks.append(df[col].values.astype(np.int8))
+        if annotator_tracks:
+            result["annotators"] = np.stack(annotator_tracks, axis=1)
 
         return result
 
@@ -172,7 +192,8 @@ def load_and_preprocess_segment(file, scaler, max_samples, samples_per_second=20
 
 def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
                           scaler_path=None, max_seq_length=86400,
-                          balance_folders=True, split_seed=42, use_sincos=True):
+                          balance_folders=True, split_seed=42, use_sincos=True,
+                          annotator_columns=None):
     """
     Convert parquet files to H5 format with preprocessing.
 
@@ -187,6 +208,8 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
         use_sincos: If True, use sin+cos time encoding (6 channels: x,y,z,temp,time_sin,time_cos).
                    If False, use sin only (5 channels: x,y,z,temp,time_sin). Default: True
     """
+    annotator_columns = annotator_columns or []
+
     print(f"\n{'='*80}")
     print("Converting Parquet Files to H5 Format")
     print(f"{'='*80}\n")
@@ -306,13 +329,38 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             dtype=dt
         )
 
+        ds_subjects = h5f.create_dataset(
+            "subject_ids",
+            shape=(num_segments,),
+            dtype=dt,
+        )
+
+        ds_Y_annotators = None
+        if annotator_columns:
+            h5f.attrs["annotator_names"] = np.array(annotator_columns, dtype=dt)
+            ds_Y_annotators = h5f.create_dataset(
+                "Y_annotators",
+                shape=(num_segments, max_len, len(annotator_columns)),
+                dtype=np.int8,
+                chunks=(1, min(1200, max_len), len(annotator_columns)),
+                compression="gzip",
+                compression_opts=4,
+            )
+
         # Process and write each file incrementally
         print("\nProcessing and writing data to H5...")
         idx = 0
         failed_files = 0
 
         for file in tqdm(valid_files, desc="Writing to H5"):
-            segment_data = load_and_preprocess_segment(file, scaler, max_samples, samples_per_second, use_sincos=use_sincos)
+            segment_data = load_and_preprocess_segment(
+                file,
+                scaler,
+                max_samples,
+                samples_per_second,
+                use_sincos=use_sincos,
+                annotator_columns=annotator_columns,
+            )
 
             if segment_data is None:
                 failed_files += 1
@@ -361,9 +409,17 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
 
             ds_Y[idx] = Y_seg
 
+            if ds_Y_annotators is not None:
+                annotators = segment_data["annotators"]
+                if seg_len < max_len:
+                    padding = np.zeros((max_len - seg_len, len(annotator_columns)), dtype=np.int8)
+                    annotators = np.vstack([annotators, padding])
+                ds_Y_annotators[idx] = annotators
+
             # Store length and segment name
             ds_lens[idx] = seg_len
             ds_segments[idx] = segment_data['segment']
+            ds_subjects[idx] = segment_data["subject"]
 
             idx += 1
 
@@ -376,10 +432,13 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
         actual_segments = idx
         if actual_segments < num_segments:
             print(f"\nTrimming H5 datasets: {actual_segments} valid segments (skipped {failed_files} failed files)")
-            ds_X.resize((actual_segments, max_len, 5))
+            ds_X.resize((actual_segments, max_len, num_channels))
             ds_Y.resize((actual_segments, max_len, 2))
             ds_lens.resize((actual_segments,))
             ds_segments.resize((actual_segments,))
+            ds_subjects.resize((actual_segments,))
+            if ds_Y_annotators is not None:
+                ds_Y_annotators.resize((actual_segments, max_len, len(annotator_columns)))
             h5f.attrs['num_segments'] = actual_segments
 
     total_time = datetime.now() - start_time
@@ -444,6 +503,12 @@ if __name__ == "__main__":
     parser.add_argument('--create_split', action='store_true', help='Create train/val split file')
     parser.add_argument('--use_sincos', type=bool, default=True,
                         help='Use sin+cos time encoding (6 channels) if True, sin only (5 channels) if False. Default: True')
+    parser.add_argument(
+        "--annotator_columns",
+        type=str,
+        default="",
+        help="Comma-separated binary TSO label columns to store as Y_annotators.",
+    )
 
     args = parser.parse_args()
 
@@ -456,7 +521,8 @@ if __name__ == "__main__":
         max_seq_length=args.max_seq_length,
         balance_folders=args.balance_folders,
         split_seed=args.seed,
-        use_sincos=args.use_sincos
+        use_sincos=args.use_sincos,
+        annotator_columns=[c.strip() for c in args.annotator_columns.split(",") if c.strip()],
     )
 
     # Create train/val split if requested

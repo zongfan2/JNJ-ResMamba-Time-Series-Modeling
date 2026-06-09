@@ -60,6 +60,17 @@ from evaluation.postprocessing import smooth_predictions, smooth_predictions_com
 
 
 # ==================== H5 Dataset Class ====================
+def _decode_h5_string(value):
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    return str(value)
+
+
+def _subject_from_segment_name(segment_name):
+    text = _decode_h5_string(segment_name)
+    return text.split("_")[0] if "_" in text else text
+
+
 class H5Dataset:
     """
     Fast dataset class for loading preprocessed H5 data.
@@ -93,6 +104,8 @@ class H5Dataset:
         self.Y = self.h5f['Y']  # [num_segments, max_len, 2]
         self.seq_lengths = self.h5f['seq_lengths'][:]  # Load lengths into RAM (small)
         self.segment_names = self.h5f['segment_names'][:]  # Load names into RAM
+        self.subject_ids = self.h5f["subject_ids"][:] if "subject_ids" in self.h5f else None
+        self.Y_annotators = self.h5f["Y_annotators"] if "Y_annotators" in self.h5f else None
 
     def __len__(self):
         return len(self.indices)
@@ -105,13 +118,23 @@ class H5Dataset:
         state. ``segment`` is the (potentially non-integer) human-readable name.
         """
         actual_idx = self.indices[idx]
-        return {
-            'X': self.X[actual_idx],  # [max_len, num_channels] - 5 or 6 channels
-            'Y': self.Y[actual_idx],  # [max_len, 2]
-            'seq_length': self.seq_lengths[actual_idx],
-            'segment': self.segment_names[actual_idx],
-            'segment_id': int(actual_idx),
+        segment_name = self.segment_names[actual_idx]
+        subject = (
+            _decode_h5_string(self.subject_ids[actual_idx])
+            if self.subject_ids is not None
+            else _subject_from_segment_name(segment_name)
+        )
+        sample = {
+            "X": self.X[actual_idx],
+            "Y": self.Y[actual_idx],
+            "seq_length": self.seq_lengths[actual_idx],
+            "segment": segment_name,
+            "segment_id": int(actual_idx),
+            "subject": subject,
         }
+        if self.Y_annotators is not None:
+            sample["Y_annotators"] = self.Y_annotators[actual_idx]
+        return sample
 
     def close(self):
         """Close H5 file."""
@@ -336,7 +359,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         t1 = time.time()
 
         # Prepare batch
-        pad_X, pad_Y, x_lens, batch_samples = add_padding_tso_patch_h5(
+        pad_X, pad_Y, x_lens, batch_samples, pad_Y_annotators = add_padding_tso_patch_h5(
             dataset, batch_indices, device,
             max_seq_len=max_seq_len,
             patch_size=patch_size,

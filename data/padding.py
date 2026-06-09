@@ -578,6 +578,8 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
     Y_batch = []
     lens_batch = []
     segments_batch = []
+    annotator_batch = []
+    has_annotators = False
 
     for idx in batch_indices:
         sample = dataset[idx]
@@ -590,6 +592,9 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
             'segment': sample['segment'],
             'segment_id': sample.get('segment_id', int(idx)),
         })
+        if "Y_annotators" in sample:
+            has_annotators = True
+            annotator_batch.append(sample["Y_annotators"])
 
     X_batch = np.stack(X_batch)  # [batch_size, max_len, num_channels]
     Y_batch = np.stack(Y_batch)  # [batch_size, max_len, 2]
@@ -602,6 +607,11 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
     pad_X = np.full((batch_size, num_minutes_max, patch_size, num_channels),
                     padding_value, dtype=np.float32)
     pad_Y = np.full((batch_size, num_minutes_max), -100, dtype=np.int64)  # -100 for ignore
+    pad_Y_annotators = None
+    if has_annotators:
+        annotator_batch = np.stack(annotator_batch)
+        num_annotators = annotator_batch.shape[-1]
+        pad_Y_annotators = np.zeros((batch_size, num_minutes_max, num_annotators), dtype=np.int8)
     x_lens = np.zeros(batch_size, dtype=np.int64)
 
     for i in range(batch_size):
@@ -634,12 +644,18 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
                 else:
                     pad_Y[i, m] = 0  # other
 
+                if pad_Y_annotators is not None:
+                    annotator_minute = annotator_batch[i, m * patch_size:(m + 1) * patch_size, :]
+                    pad_Y_annotators[i, m, :] = np.any(annotator_minute, axis=0).astype(np.int8)
+
     # Convert to torch tensors
     pad_X = torch.from_numpy(pad_X).to(device)
     pad_Y = torch.from_numpy(pad_Y).to(device)
     x_lens = torch.from_numpy(x_lens).to(device)
+    if pad_Y_annotators is not None:
+        pad_Y_annotators = torch.from_numpy(pad_Y_annotators).to(device)
 
-    return pad_X, pad_Y, x_lens, segments_batch
+    return pad_X, pad_Y, x_lens, segments_batch, pad_Y_annotators
 
 
 # ==================== Prediction Smoothing Functions ====================

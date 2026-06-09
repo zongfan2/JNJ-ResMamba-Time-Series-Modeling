@@ -37,6 +37,7 @@ from .structural_priors import (
     hour_from_time_channels,
     measure_loss_tso_structural,
 )
+from .noisy_labels import generalized_cross_entropy_loss, consensus_from_annotators
 
 __all__ = [
     # Classes
@@ -69,6 +70,8 @@ __all__ = [
     'CircadianPriorBias',
     'hour_from_time_channels',
     'measure_loss_tso_structural',
+    'generalized_cross_entropy_loss',
+    'consensus_from_annotators',
     # Modules
     'dlrtc',
     'structural_priors',

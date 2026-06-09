@@ -468,6 +468,9 @@ def measure_loss_tso_structural(
     *,
     patch_duration_hours: float,
     boundary_weight: Optional[torch.Tensor] = None,
+    supervision_weight: Optional[torch.Tensor] = None,
+    base_loss: str = "ce",
+    gce_q: float = 0.7,
     w_trans: float = 0.0,
     w_dur: float = 0.0,
     w_elr: float = 0.0,
@@ -500,12 +503,26 @@ def measure_loss_tso_structural(
     """
     out = {}
 
-    if boundary_weight is not None:
-        ce = boundary_reweighted_ce_loss(outputs, labels, boundary_weight)
+    if boundary_weight is not None and supervision_weight is not None:
+        weight = boundary_weight.to(outputs.device).float() * supervision_weight.to(outputs.device).float()
+    elif boundary_weight is not None:
+        weight = boundary_weight.to(outputs.device).float()
+    elif supervision_weight is not None:
+        weight = supervision_weight.to(outputs.device).float()
     else:
-        # Local import avoids a circular import at module load time.
-        from .standard import measure_loss_tso
-        ce = measure_loss_tso(outputs, labels, x_lengths)
+        weight = None
+
+    if base_loss == "gce":
+        from .noisy_labels import generalized_cross_entropy_loss
+        ce = generalized_cross_entropy_loss(outputs, labels, q=gce_q, weight=weight)
+    elif base_loss == "ce":
+        if weight is not None:
+            ce = boundary_reweighted_ce_loss(outputs, labels, weight)
+        else:
+            from .standard import measure_loss_tso
+            ce = measure_loss_tso(outputs, labels, x_lengths)
+    else:
+        raise ValueError(f"base_loss must be 'ce' or 'gce'; got {base_loss}")
     out['ce'] = ce
     total = ce
 

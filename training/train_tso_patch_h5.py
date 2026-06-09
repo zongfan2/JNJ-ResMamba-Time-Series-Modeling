@@ -36,6 +36,7 @@ import seaborn as sns
 from pprint import pprint
 import time
 import h5py
+import yaml
 
 from models import setup_model
 from data import (
@@ -747,7 +748,61 @@ parser.add_argument("--supcon_temperature", type=float, default=0.07,
                     help="Temperature for SupConLossV2.")
 parser.add_argument("--projection_dim", type=int, default=128,
                     help="Projection dimension for the TSO night embedding head.")
+parser.add_argument("--config", type=str, default="", help="Path to YAML config file.")
+parser.add_argument("--output_root", type=str, default="/mnt/data/GENEActive-featurized/results/DL",
+                    help="Root folder for Domino training outputs.")
+parser.add_argument("--batch_size", type=int, default=24, help="Batch size.")
 
+
+def _flatten_config(config):
+    flat = {}
+    for section in ("data", "model", "training", "loss", "evaluation"):
+        values = config.get(section, {})
+        if isinstance(values, dict):
+            flat.update(values)
+    loss_components = config.get("loss", {}).get("components", {})
+    if isinstance(loss_components, dict):
+        flat.update(loss_components)
+    return flat
+
+
+def _apply_config_defaults(parser, argv):
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=str, default="")
+    known, _ = pre_parser.parse_known_args(argv)
+    if not known.config:
+        return
+    with open(known.config, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f) or {}
+    flat = _flatten_config(config)
+    defaults = {}
+    mapping = {
+        "input_h5": "input_h5",
+        "split_file": "split_file",
+        "output": "output",
+        "output_root": "output_root",
+        "architecture": "model",
+        "epochs": "epochs",
+        "batch_size": "batch_size",
+        "lr": "finetune_lr",
+        "base_loss": "base_loss",
+        "gce_q": "gce_q",
+        "w_supcon": "w_supcon",
+        "supcon_temperature": "supcon_temperature",
+        "projection_dim": "projection_dim",
+        "w_trans": "w_trans",
+        "w_dur": "w_dur",
+        "w_elr": "w_elr",
+        "boundary_tau_steps": "boundary_tau_steps",
+        "enforce_single_tso": "enforce_single_tso",
+    }
+    for key, arg_name in mapping.items():
+        if key in flat:
+            defaults[arg_name] = flat[key]
+    parser.set_defaults(**defaults)
+
+
+_apply_config_defaults(parser, sys.argv[1:])
 args = parser.parse_args()
 
 # ==================== Setup ====================
@@ -766,7 +821,7 @@ else:
 print(f"Starting training at: {datetime.now()}")
 
 # Create output folders
-results_folder = f"/mnt/data/GENEActive-featurized/results/DL/{args.output}"
+results_folder = os.path.join(args.output_root, args.output)
 training_output_folder = os.path.join(results_folder, "training/")
 predictions_output_folder = os.path.join(training_output_folder, "predictions/")
 learning_plots_output_folder = os.path.join(training_output_folder, "learning_plots/")
@@ -787,7 +842,7 @@ with open(os.path.join(results_folder, "user_arguments.txt"), "w") as f:
 
 # ==================== Model Hyperparameters ====================
 best_params = {
-    'batch_size': 24,
+    'batch_size': args.batch_size,
     'num_filters': 128,
     'dropout': 0.3,
     'droppath': 0.3,

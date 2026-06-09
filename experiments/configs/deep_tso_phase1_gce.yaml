@@ -1,0 +1,25 @@
+experiment:
+  name: deep_tso_phase1_gce
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+training:
+  output: deep_tso_phase1_gce
+  output_root: /mnt/data/GENEActive-featurized/results/DL
+  batch_size: 24
+  epochs: 60
+  lr: 0.001
+loss:
+  base_loss: gce
+  gce_q: 0.7
+  # Structural priors stay OFF so this arm isolates GCE vs the CE baseline.
+  components:
+    w_trans: 0.0
+    w_dur: 0.0
+    w_elr: 0.0
+    w_supcon: 0.0
+evaluation:
+  enforce_single_tso: true

@@ -1275,15 +1275,17 @@ In validation and test calls, pass:
 Run:
 
 ```bash
-python -m pytest tests/test_mba4tso_patch_factory.py tests/test_deep_tso_h5_contract.py -q
+python -m pytest tests/test_mba4tso_patch_factory.py tests/test_deep_tso_supcon_batching.py tests/test_deep_tso_h5_contract.py -q
 ```
 
 Expected after implementation: all tests pass.
 
 - [ ] **Step 8: Commit**
 
+(Task 4 does NOT modify `models/resmamba.py` — `MBA4TSO_Patch` already gained `projection_dim`/`return_embedding` in Task 1. The edited files are `models/setup.py` (projection_dim wiring), `training/train_tso_patch_h5.py` (CLI flags, generator, SupCon, loss routing), `data/padding.py` (subject_index propagation), and the two test files.)
+
 ```bash
-git add models/resmamba.py models/setup.py training/train_tso_patch_h5.py tests/test_mba4tso_patch_factory.py
+git add models/setup.py training/train_tso_patch_h5.py data/padding.py tests/test_mba4tso_patch_factory.py tests/test_deep_tso_supcon_batching.py
 git commit -m "feat: add cross-night SupCon hook for Deep TSO"
 ```
 

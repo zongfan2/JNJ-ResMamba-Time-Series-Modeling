@@ -423,7 +423,8 @@ def test_consensus_confidence_from_annotator_votes():
     votes = torch.tensor([[[1, 1, 1], [1, 0, 1], [0, 1, 0], [0, 0, 0]]])
     label, weight = consensus_from_annotators(votes, positive_class=2)
     assert label.tolist() == [[2, 2, 0, 0]]
-    assert weight.tolist() == [[1.0, 2 / 3, 2 / 3, 1.0]]
+    # float32 confidences, so compare with tolerance (2/3 is not float32-exact).
+    assert torch.allclose(weight, torch.tensor([[1.0, 2 / 3, 2 / 3, 1.0]]), atol=1e-6)
 ```
 
 - [ ] **Step 2: Run failing tests on Domino**

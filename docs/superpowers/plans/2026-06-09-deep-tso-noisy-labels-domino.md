@@ -289,15 +289,16 @@ class MBA4TSO_Patch(nn.Module):
             for layer in self.encoder:
                 x = layer(x, x, mask)
 
-        pooled = masked_avg_pool(x.permute(0, 2, 1), mask.float())
-        embedding = self.projection_head(pooled)
-
         output = self.output_projection(x)
         if output.size(2) != seq_len:
             output = F.interpolate(output, size=seq_len, mode="linear", align_corners=False)
         output = output.permute(0, 2, 1)
 
+        # Only compute the pooled night embedding when a caller (cross-night
+        # SupCon, Task 4) actually needs it — otherwise it is wasted compute.
         if return_embedding:
+            pooled = masked_avg_pool(x.permute(0, 2, 1), mask.float())
+            embedding = self.projection_head(pooled)
             return output, embedding
         return output
 ```

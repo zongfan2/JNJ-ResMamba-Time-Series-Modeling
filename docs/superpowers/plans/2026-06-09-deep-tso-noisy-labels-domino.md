@@ -1356,6 +1356,7 @@ def _apply_config_defaults(parser, argv):
         "gce_q": "gce_q",
         "w_supcon": "w_supcon",
         "supcon_temperature": "supcon_temperature",
+        "use_consensus_weight": "use_consensus_weight",
         "projection_dim": "projection_dim",
         "w_trans": "w_trans",
         "w_dur": "w_dur",

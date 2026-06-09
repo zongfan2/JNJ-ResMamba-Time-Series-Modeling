@@ -1954,9 +1954,12 @@ python -m pytest \
   tests/test_mba4tso_patch_factory.py \
   tests/test_deep_tso_noisy_labels.py \
   tests/test_deep_tso_h5_contract.py \
+  tests/test_deep_tso_supcon_batching.py \
   tests/test_deep_tso_validation.py \
   -q
 ```
+
+(`test_deep_tso_noisy_labels.py` and `test_deep_tso_validation.py` already pass locally; the other three need the Domino `mamba_ssm` stack.)
 
 Expected: all tests pass.
 

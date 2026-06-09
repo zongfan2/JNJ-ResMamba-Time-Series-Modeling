@@ -741,7 +741,7 @@ Before processing files, add:
     annotator_columns = annotator_columns or []
 ```
 
-Inside the H5 file setup, after `ds_Y`, add:
+Inside the H5 file setup, after `ds_subjects` is created in Step 3 (this matters: the block below uses `dt = h5py.string_dtype(...)`, which is only defined just before `ds_segments`/`ds_subjects` — inserting it right after `ds_Y` would reference `dt` before it exists and raise `NameError`), add:
 
 ```python
         ds_Y_annotators = None

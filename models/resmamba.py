@@ -11,6 +11,7 @@ from mamba_ssm import Mamba
 from .mamba_blocks import MBA, AffineDropPath
 from .attention import AttModule_mamba, AttModule_mamba_cross, MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 from .components import FeatureExtractor, ConvProjection
+from .specialized import PatchEmbedding
 
 # Primary ResMamba models
 
@@ -805,6 +806,168 @@ class MBA_patch(nn.Module):
             attention_weights = attention_weights.reshape(-1)
         
         return x1, x2, x3, attention_weights, contrastive_embedding, mixup_info
+
+class MBA4TSO_Patch(nn.Module):
+    """Mamba TSO model for raw per-minute patches.
+
+    Args:
+        x: [batch_size, seq_len, patch_size, channels] patched input.
+        x_lengths: [batch_size] per-sample sequence lengths in minutes.
+    Returns:
+        output: [batch_size, seq_len, output_channels] per-minute logits, or
+            (output, embedding) when return_embedding=True (embedding is the
+            pooled [batch_size, projection_dim] night representation for SupCon).
+    """
+
+    def __init__(
+        self,
+        patch_size=1200,
+        patch_channels=5,
+        num_filters=64,
+        num_feature_layers=3,
+        num_encoder_layers=3,
+        drop_path_rate=0.3,
+        kernel_size_feature=3,
+        kernel_size_mba=7,
+        dropout_rate=0.2,
+        add_positional_encoding=True,
+        max_seq_len=1440,
+        featurelayer="ResNet",
+        skip_connect=True,
+        skip_cross_attention=False,
+        norm1="BN",
+        norm2="IN",
+        output_channels=3,
+        projection_dim=128,
+    ):
+        super().__init__()
+        self.num_feature_layers = num_feature_layers
+        self.add_positional_encoding = add_positional_encoding
+        self.output_channels = output_channels
+        self.skip_connect = skip_connect
+        self.skip_cross_attention = skip_cross_attention
+
+        self.patch_embedding = PatchEmbedding(
+            patch_size=patch_size,
+            in_channels=patch_channels,
+            num_filters=num_filters,
+        )
+
+        self.feature_extractor = None
+        if num_feature_layers > 0:
+            self.feature_extractor = FeatureExtractor(
+                tsm_horizon=64,
+                in_channels=num_filters,
+                pos_embed_dim=16,
+                num_filters=num_filters,
+                kernel_size=kernel_size_feature,
+                num_feature_layers=num_feature_layers,
+                tsm=False,
+                featurelayer=featurelayer,
+                norm=norm1,
+            )
+
+        if add_positional_encoding:
+            self.positional_encoding = PositionalEncoding(d_model=num_filters, max_len=max_seq_len)
+
+        if self.skip_connect and self.skip_cross_attention:
+            self.encoder = nn.ModuleList([
+                AttModule_mamba_cross(
+                    2 ** i,
+                    num_filters,
+                    num_filters,
+                    1,
+                    1,
+                    "sliding_att",
+                    "encoder",
+                    1,
+                    drop_path_rate=drop_path_rate,
+                    kernel_size=kernel_size_mba,
+                    dropout_rate=dropout_rate,
+                )
+                for i in range(num_encoder_layers)
+            ])
+        else:
+            self.encoder = nn.ModuleList([
+                AttModule_mamba(
+                    2 ** i,
+                    num_filters,
+                    num_filters,
+                    "sliding_att",
+                    "encoder",
+                    1,
+                    drop_path_rate=drop_path_rate,
+                    dropout_rate=dropout_rate,
+                    kernel_size=kernel_size_mba,
+                    norm=norm2,
+                )
+                for i in range(num_encoder_layers)
+            ])
+
+        self.output_projection = nn.Conv1d(num_filters, output_channels, kernel_size=1)
+        self.projection_head = nn.Sequential(
+            nn.Linear(num_filters, num_filters),
+            nn.ReLU(inplace=True),
+            nn.Linear(num_filters, projection_dim),
+        )
+
+    def forward(self, x, x_lengths, return_embedding=False):
+        batch_size, seq_len, _, _ = x.size()
+        if isinstance(x_lengths, torch.Tensor):
+            lengths = x_lengths.clone().detach().to(x.device)
+        else:
+            lengths = torch.tensor(x_lengths, device=x.device)
+        mask = create_mask(lengths, seq_len, batch_size, x.device).bool()
+
+        x = self.patch_embedding(x).permute(0, 2, 1)
+
+        feature_maps = []
+        if self.feature_extractor is not None:
+            if self.skip_connect:
+                x, feature_maps = self.feature_extractor(x, mask, return_intermediates=True)
+            else:
+                x = self.feature_extractor(x, mask)
+
+            if x.size(2) != mask.size(1):
+                mask = F.interpolate(
+                    mask.unsqueeze(1).float(),
+                    size=x.size(2),
+                    mode="nearest",
+                ).squeeze(1).bool()
+
+        if self.add_positional_encoding:
+            x = self.positional_encoding(x)
+
+        if self.skip_connect and self.num_feature_layers > 0:
+            for i, layer in enumerate(self.encoder):
+                if self.skip_cross_attention:
+                    encoder_states = None
+                    if i < len(feature_maps):
+                        encoder_states = feature_maps[len(feature_maps) - 1 - i]
+                    x = layer(x, encoder_states, mask)
+                else:
+                    x = layer(x, x, mask)
+                    if i < len(feature_maps):
+                        skip = feature_maps[len(feature_maps) - 1 - i]
+                        if x.size(2) != skip.size(2):
+                            skip = F.interpolate(skip, size=x.size(2), mode="linear", align_corners=False)
+                        x = x + skip
+        else:
+            for layer in self.encoder:
+                x = layer(x, x, mask)
+
+        output = self.output_projection(x)
+        if output.size(2) != seq_len:
+            output = F.interpolate(output, size=seq_len, mode="linear", align_corners=False)
+        output = output.permute(0, 2, 1)
+
+        # Only compute the pooled night embedding when a caller (cross-night
+        # SupCon, Task 4) actually needs it — otherwise it is wasted compute.
+        if return_embedding:
+            pooled = masked_avg_pool(x.permute(0, 2, 1), mask.float())
+            embedding = self.projection_head(pooled)
+            return output, embedding
+        return output
 
 class MBA4TSO(nn.Module):
     """

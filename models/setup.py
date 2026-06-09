@@ -23,7 +23,7 @@ from .attention import (
     MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 )
 from .components import FeatureExtractor, FeatureExtractorConv2d, FeatureExtractorForPretraining
-from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, MBA_v1, MBA_v1_ForPretraining, latent_mixup, masked_avg_pool, create_mask
+from .resmamba import MBA_tsm, MBA_tsm_with_padding, MBA_patch, MBA4TSO, MBA4TSO_Patch, MBA_v1, MBA_v1_ForPretraining, latent_mixup, masked_avg_pool, create_mask
 from .encoder_decoder import (
     MBA_encoder_decoder,
     MBA_tsm_encoder_decoder_ch_bottleneck,
@@ -292,6 +292,8 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
             norm1 = best_params.get("norm1", "BN")
             norm2 = best_params.get("norm2", "IN")
             output_channels = best_params.get("output_channels", 3)
+            skip_connect = best_params.get("skip_connect", True)
+            skip_cross_attention = best_params.get("skip_cross_attention", False)
             model = MBA4TSO_Patch(
                 patch_size=patch_size,
                 patch_channels=patch_channels,
@@ -306,7 +308,9 @@ def setup_model(model_name, input_tensor_size,max_seq_len, best_params, pretrain
                 featurelayer=featurelayer,
                 norm1=norm1,
                 norm2=norm2,
-                output_channels=output_channels
+                output_channels=output_channels,
+                skip_connect=skip_connect,
+                skip_cross_attention=skip_cross_attention,
             )
         case "mbatsmed":
             model = MBA_tsm_ED(

@@ -17,19 +17,8 @@ Usage:
         --val_size 0.1 \
         --balance_folders
 """
-
-
-import subprocess
-
-import joblib
-
-shell_script = '''
-cd munge/predictive_modeling
-sudo python3.11 -m pip install -r requirements-tso.txt
-sudo python3.11 -m pip install -e .
-sudo python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures mamba-ssm[causal-conv1d]==2.2.2
-'''
-result = subprocess.run(shell_script, shell=True, capture_output=True, text=True)
+# Domino dependency installation is handled by experiments/domino/deep_tso_setup.sh.
+# Keep training modules importable without mutating the environment.
 
 import os
 import sys

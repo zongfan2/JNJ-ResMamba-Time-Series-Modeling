@@ -910,6 +910,14 @@ to:
         pad_X, pad_Y, x_lens, batch_samples, pad_Y_annotators = add_padding_tso_patch_h5(
 ```
 
+`add_padding_tso_patch_h5` has a SECOND live consumer: `training/train_tso_dlrtc.py` (canonical, imports it `from data`) unpacks 4 values at three call sites (~lines 659, 806, 1013). Changing the arity to 5 breaks them with `ValueError: too many values to unpack`. The DLRTC trainer does not use consensus, so update each of those three sites to discard the new value:
+
+```python
+        pad_X, pad_Y, x_lens, batch_samples, _ = add_padding_tso_patch_h5(
+```
+
+(The legacy `legacy/predict_TSO_segment_patch_*.py` and `NS_production/` consumers import their own unchanged 4-value copy from `Helpers/DL_helpers.py`, so they are unaffected.) Add `training/train_tso_dlrtc.py` to this task's commit.
+
 - [ ] **Step 7: Run H5 contract tests on Domino**
 
 Run:
@@ -923,7 +931,7 @@ Expected after implementation: `2 passed`.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add training/convert_h5.py training/train_tso_patch_h5.py data/padding.py tests/test_deep_tso_h5_contract.py
+git add training/convert_h5.py training/train_tso_patch_h5.py training/train_tso_dlrtc.py data/padding.py tests/test_deep_tso_h5_contract.py
 git commit -m "feat: extend TSO H5 contract for subjects and consensus labels"
 ```
 

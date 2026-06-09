@@ -1,0 +1,115 @@
+experiment:
+  name: tso_structural_priors
+  description: "TSO detection with structural priors + ELR for noisy labels"
+  task: tso_detection
+  author: "researcher"
+  date: "2026-05-27"
+  notes: |
+    Replaces DLRTC with structural priors that match TSO's actual geometry:
+    one continuous segment per ~24h, plausible duration band, strong
+    circadian prior. DLRTC was tried and did not move performance, likely
+    because its noise model (independent per-sample flips) does not match
+    the structured noise in TSO labels (systematic onset/offset shifts,
+    brief-awakening misclassification, self-report rounding).
+
+    Loss stack (see losses/structural_priors.py):
+      (boundary-reweighted) CE
+      + w_trans * transition_count_loss(budget=2.0)
+      + w_dur   * duration_prior_loss(d_min=3, d_max=11)
+      + w_elr   * elr_loss(beta=0.7) -- enabled after warmup epochs
+      + CircadianPriorBias(gamma_init=0.0, learnable)
+
+    Pair with --enforce_single_tso at inference; the transition-count loss
+    is the training-time analog of that post-processing step.
+
+    Suggested ablation rows (in order):
+      1. plain CE                                       (baseline)
+      2. + transition-count                             (Family 2a)
+      3. + duration prior                               (Family 2b)
+      4. + circadian bias                               (Family 2c)
+      5. + ELR                                          (Family 1)
+      6. + boundary reweighting                         (optional)
+
+data:
+  format: h5
+  sampling_rate: 20
+  channels: [x, y, z, temp, time_sin, time_cos]
+  padding_value: 0.0                  # script default; -999 conflicts with BatchNorm
+  patch_duration_hours: 0.016667      # 1-minute patches (1200 samples @ 20Hz)
+
+model:
+  architecture: mba4tso_patch
+  num_filters: 128                    # = d_model
+  num_feature_layers: 6
+  blocks_MBA: 5
+  kernel_f: 3
+  kernel_MBA: 7
+  dropout: 0.3
+  droppath: 0.3
+  patch_size: 1200                    # 60s @ 20Hz
+  patch_channels: 6
+  norm1: BN
+  norm2: GN
+  output_channels: 1                  # binary TSO vs not (matches script default)
+  skip_connect: true
+  skip_cross_attention: true
+  featurelayer: ResNet
+  use_scaler: false
+
+training:
+  optimizer: rmsprop
+  lr: 0.001
+  scheduler: cosine_annealing_warm_restarts
+  batch_size: 24
+  epochs: 60
+  early_stopping_patience: 12
+  warmup_epochs: 5                    # CE-only for first N epochs; then enable ELR
+  w_other: 1.0
+  w_nonwear: 1.0
+  w_tso: 1.0
+
+loss:
+  type: tso_structural
+  components:
+    ce: 1.0
+    transition_count: 0.2             # tune in {0.05, 0.1, 0.2, 0.5}
+    duration_prior: 0.1               # tune in {0.0, 0.05, 0.1}
+    elr: 0.5                          # tune in {0.0, 0.2, 0.5, 1.0}
+  boundary_reweight:
+    tau_steps: 0                      # 0 disables; try 5/10/20 for ablation
+  transition:
+    budget: 2.0
+  duration:
+    d_min: 3.0
+    d_max: 11.0
+  elr:
+    beta: 0.7
+    init: 0.5
+    enable_after_epoch: 5             # match training.warmup_epochs
+  circadian_bias:
+    enabled: true
+    gamma_init: 0.0                   # 0 = prior off at init, model learns weight
+    smooth_sigma: 1.0
+    fit_from: train                   # build log_p_circ from training labels at startup
+
+evaluation:
+  strategy: lofo
+  metrics:
+    - f1
+    - precision
+    - recall
+    - auc
+    - accuracy
+    - segment_count_error
+    - duration_error
+  val_split: 0.2
+  postprocessing:
+    enforce_single_tso: true
+    min_gap_minutes: 30
+    min_duration_minutes: 10
+
+reproducibility:
+  random_seed: 42
+  torch_seed: 42
+  numpy_seed: 42
+  use_deterministic_algorithms: true

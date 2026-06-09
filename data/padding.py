@@ -584,7 +584,12 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
         X_batch.append(sample['X'])  # [max_len, num_channels]
         Y_batch.append(sample['Y'])  # [max_len, 2]
         lens_batch.append(sample['seq_length'])
-        segments_batch.append({'segment': sample['segment']})
+        # Propagate segment_id when the dataset exposes one (added 2026-05 for
+        # ELRMemory). Falls back to the local batch index for older datasets.
+        segments_batch.append({
+            'segment': sample['segment'],
+            'segment_id': sample.get('segment_id', int(idx)),
+        })
 
     X_batch = np.stack(X_batch)  # [batch_size, max_len, num_channels]
     Y_batch = np.stack(Y_batch)  # [batch_size, max_len, 2]

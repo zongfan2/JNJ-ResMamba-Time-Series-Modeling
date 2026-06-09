@@ -25,6 +25,18 @@ from .standard import (
 )
 
 from . import dlrtc
+from . import structural_priors
+from .structural_priors import (
+    transition_count_loss,
+    duration_prior_loss,
+    compute_boundary_weights,
+    boundary_reweighted_ce_loss,
+    ELRMemory,
+    elr_loss,
+    CircadianPriorBias,
+    hour_from_time_channels,
+    measure_loss_tso_structural,
+)
 
 __all__ = [
     # Classes
@@ -47,6 +59,17 @@ __all__ = [
     'measure_loss_tso',
     'measure_loss_tso_with_continuity',
     'tso_continuity_loss',
+    # Structural priors (Deep TSO)
+    'transition_count_loss',
+    'duration_prior_loss',
+    'compute_boundary_weights',
+    'boundary_reweighted_ce_loss',
+    'ELRMemory',
+    'elr_loss',
+    'CircadianPriorBias',
+    'hour_from_time_channels',
+    'measure_loss_tso_structural',
     # Modules
     'dlrtc',
+    'structural_priors',
 ]

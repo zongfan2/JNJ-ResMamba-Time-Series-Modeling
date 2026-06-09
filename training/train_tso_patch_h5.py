@@ -47,19 +47,25 @@ import h5py
 
 from models import setup_model
 from data import (
+    add_padding_tso_patch_h5,
 )
 from losses import (
     measure_loss_tso,
     measure_loss_tso_with_continuity,
-    batch_enforce_single_tso
+    # Structural priors and noisy-label regularizers (Deep TSO).
+    measure_loss_tso_structural,
+    ELRMemory,
+    CircadianPriorBias,
+    hour_from_time_channels,
+    compute_boundary_weights,
 )
-from utils import (
-    EarlyStopping,
-    calculate_metrics_nn,
-    smooth_predictions,
-    smooth_predictions_combined,
-    plot_tso_learning_curves
-)
+from evaluation.postprocessing import batch_enforce_single_tso
+# Pre-existing utils imports were stale: EarlyStopping lives in losses/standard.py
+# and the rest live under evaluation/. Pull each from its real module so the
+# script can actually import.
+from losses.standard import EarlyStopping
+from evaluation.metrics import calculate_metrics_nn, plot_tso_learning_curves
+from evaluation.postprocessing import smooth_predictions, smooth_predictions_combined
 
 
 # ==================== H5 Dataset Class ====================
@@ -101,13 +107,19 @@ class H5Dataset:
         return len(self.indices)
 
     def __getitem__(self, idx):
-        """Get a single segment."""
+        """Get a single segment.
+
+        ``segment_id`` is the H5-file index (constant across train/val splits)
+        and is used as the key for ELRMemory and any other per-segment auxiliary
+        state. ``segment`` is the (potentially non-integer) human-readable name.
+        """
         actual_idx = self.indices[idx]
         return {
             'X': self.X[actual_idx],  # [max_len, num_channels] - 5 or 6 channels
             'Y': self.Y[actual_idx],  # [max_len, 2]
             'seq_length': self.seq_lengths[actual_idx],
-            'segment': self.segment_names[actual_idx]
+            'segment': self.segment_names[actual_idx],
+            'segment_id': int(actual_idx),
         }
 
     def close(self):
@@ -277,7 +289,14 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     visualize_batch=False, output_folder=None,
                     smooth_preds=False, smooth_method='majority_vote', smooth_window=5,
                     continuity_weight=0.0, enforce_single_tso=False,
-                    min_gap_minutes=30, min_duration_minutes=10):
+                    min_gap_minutes=30, min_duration_minutes=10,
+                    # ----- Structural priors and noisy-label regularizers -----
+                    elr_memory=None, w_elr=0.0,
+                    w_trans=0.0, trans_budget=2.0,
+                    w_dur=0.0, dur_min=3.0, dur_max=11.0,
+                    boundary_tau_steps=0.0,
+                    circadian_bias=None,
+                    patch_duration_hours=None):
     """
     Run model on H5 dataset for one epoch.
 
@@ -349,8 +368,58 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                                           smooth_method=smooth_method,
                                           smooth_window=smooth_window)
 
-        # Calculate loss (with optional continuity regularization)
-        if continuity_weight > 0:
+        # --- Circadian logit bias (output-side, learnable gamma) -----------
+        # Pulls in the population time-of-day prior. Channels are assumed to be
+        # [x, y, z, temperature, time_sin, time_cos] for 6-channel data. For
+        # 5-channel data the caller is responsible for passing circadian_bias=None.
+        if circadian_bias is not None:
+            # pad_X: [B, T_min, patch_size, num_channels]. Average sin/cos across
+            # the patch to get per-minute time channels, then recover hour-of-day.
+            ts_per_min = pad_X[..., 4].mean(dim=2)   # [B, T_min]
+            tc_per_min = pad_X[..., 5].mean(dim=2)   # [B, T_min]
+            hours_per_min = hour_from_time_channels(ts_per_min, tc_per_min)
+            outputs = circadian_bias(outputs, hours_per_min)
+
+        # --- Boundary reweighting precompute (label-based, Approach 1) -----
+        boundary_weight = None
+        if boundary_tau_steps > 0:
+            labels_np = pad_Y.cpu().numpy()
+            bw = np.stack([
+                compute_boundary_weights(labels_np[i], tau_steps=boundary_tau_steps)
+                for i in range(labels_np.shape[0])
+            ])
+            boundary_weight = torch.from_numpy(bw).to(device)
+
+        # --- ELR target lookup (per-segment EMA of past predictions) -------
+        elr_target = None
+        if w_elr > 0 and elr_memory is not None:
+            segment_ids = np.array(
+                [s.get('segment_id', i) for i, s in enumerate(batch_samples)],
+                dtype=np.int64,
+            )
+            elr_target = elr_memory.get(segment_ids).to(device)
+
+        # --- Calculate loss -----------------------------------------------
+        use_structural = (
+            w_trans > 0 or w_dur > 0 or w_elr > 0 or boundary_weight is not None
+        )
+        if use_structural:
+            loss_dict = measure_loss_tso_structural(
+                outputs, pad_Y, x_lens,
+                patch_duration_hours=patch_duration_hours,
+                boundary_weight=boundary_weight,
+                w_trans=w_trans, w_dur=w_dur, w_elr=w_elr,
+                trans_budget=trans_budget, dur_min=dur_min, dur_max=dur_max,
+                elr_target=elr_target,
+            )
+            total_loss = loss_dict['total']
+            # Map structural-loss components onto the existing class/cont
+            # tracking fields so downstream printing keeps working unchanged.
+            class_loss = loss_dict['ce']
+            cont_loss = loss_dict['trans'] + loss_dict['dur'] + loss_dict['elr']
+            epoch_class_loss += class_loss.item()
+            epoch_cont_loss += cont_loss.item()
+        elif continuity_weight > 0:
             total_loss, class_loss, cont_loss = measure_loss_tso_with_continuity(
                 outputs, pad_Y, x_lens, continuity_weight=continuity_weight
             )
@@ -366,6 +435,22 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
+
+            # --- ELR memory update --------------------------------------
+            # Refresh per-segment EMA of predictions even during ELR warmup
+            # (i.e., when w_elr == 0 but memory is provided) so the target
+            # is meaningful as soon as the loss term kicks in.
+            if elr_memory is not None:
+                with torch.no_grad():
+                    if outputs.shape[-1] == 1:
+                        probs_for_mem = torch.sigmoid(outputs[..., 0]).cpu().numpy()
+                    else:
+                        probs_for_mem = torch.softmax(outputs, dim=-1).cpu().numpy()
+                segment_ids = np.array(
+                    [s.get('segment_id', i) for i, s in enumerate(batch_samples)],
+                    dtype=np.int64,
+                )
+                elr_memory.update(segment_ids, probs_for_mem)
 
         # Record loss
         epoch_loss += total_loss.item()
@@ -536,6 +621,32 @@ parser.add_argument('--pretrained_model', type=str, default=None,
 parser.add_argument('--freeze_layers', type=str, default=None,
                    choices=['none', 'encoder', 'feature_extractor', 'all_except_projection'],
                    help='Which layers to freeze during fine-tuning. Default: none (train all layers)')
+# ---- Structural priors and noisy-label regularizers (Deep TSO) ----
+parser.add_argument('--w_trans', type=float, default=0.0,
+                    help='Weight for transition-count loss (single-segment prior).')
+parser.add_argument('--trans_budget', type=float, default=2.0,
+                    help='TV-units budget for transition-count loss (default 2 = one segment per sequence).')
+parser.add_argument('--w_dur', type=float, default=0.0,
+                    help='Weight for duration prior loss (hinge on soft TSO duration).')
+parser.add_argument('--dur_min', type=float, default=3.0,
+                    help='Lower bound (hours) of plausible TSO duration band.')
+parser.add_argument('--dur_max', type=float, default=11.0,
+                    help='Upper bound (hours) of plausible TSO duration band.')
+parser.add_argument('--w_elr', type=float, default=0.0,
+                    help='Weight for Early-Learning Regularization (Liu et al., NeurIPS 2020).')
+parser.add_argument('--elr_beta', type=float, default=0.7,
+                    help='EMA decay for ELR memory; higher = slower drift toward recent predictions.')
+parser.add_argument('--elr_warmup_epochs', type=int, default=5,
+                    help='Disable ELR loss until after this epoch (hard cutoff; memory still updates).')
+parser.add_argument('--boundary_tau_steps', type=float, default=0.0,
+                    help='Boundary-distance decay (in timesteps) for per-position loss reweighting; 0 disables.')
+parser.add_argument('--enable_circadian', action='store_true',
+                    help='Enable circadian logit-bias module (requires 6-channel data with time_sin/time_cos).')
+parser.add_argument('--circadian_gamma_init', type=float, default=0.0,
+                    help='Initial value for learnable circadian gamma scalar.')
+parser.add_argument('--circadian_smooth_sigma', type=float, default=1.0,
+                    help='Gaussian smoothing sigma (in hour-bins) for log_p_circ table.')
+
 parser.add_argument('--finetune_lr', type=float, default=None,
                    help='Learning rate for fine-tuning (lower than training from scratch). If not set, uses best_params["lr"]')
 
@@ -721,11 +832,82 @@ for iteration in range(args.training_iterations):
     if frozen_params > 0:
         print(f"Frozen parameters: {frozen_params:,} ({100*frozen_params/total_params:.1f}%)")
 
+    # ==================== Structural Priors / ELR / Circadian Bias ====================
+    # Patch duration in hours: patch_size samples / samples_per_second / 3600 s/h.
+    # For the default 1200 samples @ 20Hz that is exactly 1 minute = 1/60 h.
+    patch_duration_hours = (
+        best_params['patch_size'] / float(dataset_train.samples_per_second) / 3600.0
+    )
+
+    # Per-segment EMA buffer for Early-Learning Regularization. Indexed by the
+    # H5-file segment_id (constant across train/val splits), so a single
+    # ELRMemory works whether the same segment appears in train or val.
+    elr_memory = None
+    if args.w_elr > 0:
+        elr_memory = ELRMemory(
+            num_segments=dataset_train.num_segments,
+            max_seq_len=max_seq_len,
+            num_classes=best_params['output_channels'],
+            beta=args.elr_beta,
+        )
+        print(f"[ELR] Memory initialized: {dataset_train.num_segments} segments "
+              f"x {max_seq_len} steps, beta={args.elr_beta}, "
+              f"warmup_epochs={args.elr_warmup_epochs}")
+
+    # Circadian logit-bias module: learnable gamma * fixed log_p_circ(hour).
+    # log_p_circ is fit from training labels at startup; gamma is trained jointly.
+    circadian_bias = None
+    if args.enable_circadian:
+        if dataset_train.num_channels != 6:
+            print(f"[Circadian] WARNING: need 6 channels (have {dataset_train.num_channels}); "
+                  f"disabling circadian bias.")
+        else:
+            print("[Circadian] Fitting log_p_circ from training labels...")
+            sample_n = min(200, len(train_indices))
+            rng = np.random.default_rng(42)
+            sampled = rng.choice(train_indices, size=sample_n, replace=False)
+            hours_list, labels_list = [], []
+            for sid in sampled:
+                x = dataset_train.X[sid]  # [max_len, num_channels]
+                y = dataset_train.Y[sid]  # [max_len, 2]
+                L = int(dataset_train.seq_lengths[sid])
+                if L <= 0:
+                    continue
+                ts = x[:L, 4].astype(np.float32)
+                tc = x[:L, 5].astype(np.float32)
+                hours = ((np.arctan2(ts, tc) / (2.0 * np.pi)) * 24.0) % 24.0
+                predtso = y[:L, 0]
+                nonwear = y[:L, 1]
+                lab = np.where(
+                    predtso > 0, 2,
+                    np.where(nonwear > 0, 1, 0)
+                ).astype(np.int64)
+                hours_list.append(hours)
+                labels_list.append(lab)
+            if hours_list:
+                all_hours = np.concatenate(hours_list)
+                all_labels = np.concatenate(labels_list)
+                circadian_bias = CircadianPriorBias.from_training_labels(
+                    all_hours, all_labels,
+                    num_classes=best_params['output_channels'],
+                    gamma_init=args.circadian_gamma_init,
+                    smooth_sigma=args.circadian_smooth_sigma,
+                ).to(device)
+                print(f"[Circadian] Bias module ready "
+                      f"(gamma_init={args.circadian_gamma_init}, "
+                      f"smooth_sigma={args.circadian_smooth_sigma}, "
+                      f"fit_segments={len(hours_list)})")
+
     # Setup optimizer and scheduler
     optimizer = optim.RMSprop(
         filter(lambda p: p.requires_grad, model.parameters()),
         lr=best_params['lr']
     )
+    # Add the learnable circadian gamma to the optimizer as a separate param
+    # group so it inherits the LR schedule but stays distinguishable.
+    if circadian_bias is not None:
+        optimizer.add_param_group({'params': list(circadian_bias.parameters())})
+        print("[Circadian] Added gamma parameter group to optimizer")
 
     nb_steps = len(train_indices) // best_params['batch_size']
     print(f"Steps per epoch: {nb_steps}")
@@ -785,6 +967,10 @@ for iteration in range(args.training_iterations):
             # Train
             model.train()
             t1 = time.time()
+            # Hard cutoff: ELR loss is 0 until the warmup epoch is reached.
+            # The memory itself still accumulates predictions during warmup so
+            # the EMA target is meaningful the moment the loss term kicks in.
+            elr_active = args.w_elr if epoch >= args.elr_warmup_epochs else 0.0
             model, train_metrics, _ = run_model_tso_h5(
                 model, dataset_train, best_params['batch_size'], True, device, optimizer, scheduler,
                 max_seq_len=max_seq_len,
@@ -794,7 +980,14 @@ for iteration in range(args.training_iterations):
                 continuity_weight=args.continuity_weight,
                 enforce_single_tso=False,  # No post-processing during training
                 min_gap_minutes=args.min_gap_minutes,
-                min_duration_minutes=args.min_duration_minutes
+                min_duration_minutes=args.min_duration_minutes,
+                # ----- Structural priors / ELR / circadian bias -----
+                elr_memory=elr_memory, w_elr=elr_active,
+                w_trans=args.w_trans, trans_budget=args.trans_budget,
+                w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
+                boundary_tau_steps=args.boundary_tau_steps,
+                circadian_bias=circadian_bias,
+                patch_duration_hours=patch_duration_hours,
             )
             print("Time cost for training: ", time.time()-t1)
 
@@ -832,7 +1025,15 @@ for iteration in range(args.training_iterations):
                         continuity_weight=args.continuity_weight,
                         enforce_single_tso=False,  # No post-processing during validation
                         min_gap_minutes=args.min_gap_minutes,
-                        min_duration_minutes=args.min_duration_minutes
+                        min_duration_minutes=args.min_duration_minutes,
+                        # ----- Structural priors carry through so val loss is comparable -----
+                        # ELR is training-only; pass w_elr=0 and no memory updates happen.
+                        elr_memory=None, w_elr=0.0,
+                        w_trans=args.w_trans, trans_budget=args.trans_budget,
+                        w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
+                        boundary_tau_steps=args.boundary_tau_steps,
+                        circadian_bias=circadian_bias,
+                        patch_duration_hours=patch_duration_hours,
                     )
 
                 history['val_loss'].append(val_metrics['loss'])
@@ -902,8 +1103,16 @@ for iteration in range(args.training_iterations):
             continuity_weight=args.continuity_weight,
             enforce_single_tso=args.enforce_single_tso,
             min_gap_minutes=args.min_gap_minutes,
-            min_duration_minutes=args.min_duration_minutes
+            min_duration_minutes=args.min_duration_minutes,
+            # ----- Structural priors / circadian bias (test) -----
+            elr_memory=None, w_elr=0.0,
+            w_trans=args.w_trans, trans_budget=args.trans_budget,
+            w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
+            boundary_tau_steps=args.boundary_tau_steps,
+            circadian_bias=circadian_bias,
+            patch_duration_hours=patch_duration_hours,
         )
+
 
     # Calculate comprehensive metrics
     if best_params['output_channels'] == 1:

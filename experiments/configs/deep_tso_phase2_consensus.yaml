@@ -9,7 +9,7 @@ model:
 training:
   output: deep_tso_phase2_consensus
   output_root: /mnt/data/GENEActive-featurized/results/DL
-  batch_size: 24
+  batch_size: 8   # raw-patch model is activation-heavy; 24 OOMs a 22GB GPU
   epochs: 60
   lr: 0.001
 loss:

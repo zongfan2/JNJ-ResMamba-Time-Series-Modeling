@@ -33,13 +33,14 @@ ANNOTATOR_HINTS = ["sadeh", "cole", "kripke", "vanhees", "van_hees", "hdcza",
 
 
 def get_columns(path):
-    """Return the column names of a parquet file as cheaply as possible."""
+    """Return the column NAMES (strings) of a parquet file as cheaply as possible."""
     try:
         import pyarrow.parquet as pq
-        return list(pq.read_schema(path))  # ParquetFile schema -> field names
+        # .names is a list[str]; iterating the Schema itself yields Field objects.
+        return [str(name) for name in pq.read_schema(path).names]
     except Exception:
         import pandas as pd
-        return list(pd.read_parquet(path).columns)
+        return [str(c) for c in pd.read_parquet(path).columns]
 
 
 def find_files(folder):
@@ -87,6 +88,11 @@ def main():
         if col in present_in_any:
             return "SOME"
         return "MISSING"
+
+    # Show the ACTUAL schema so we can map convert_h5 to whatever names exist.
+    print("All columns present (union across sampled files):")
+    print("  " + ", ".join(sorted(present_in_any)))
+    print()
 
     print("Required label columns (convert_h5 -> Y):")
     for c in REQUIRED_LABELS:

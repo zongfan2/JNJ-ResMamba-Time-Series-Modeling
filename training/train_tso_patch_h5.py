@@ -418,6 +418,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     # Per-sample label-free TSO interval records (onset/offset/duration/segments).
     interval_records = []
     nonfinite_batches = 0   # batches whose loss was NaN/Inf (model not learning if high)
+    nan_grad_batches = 0    # batches with finite loss but NaN/Inf gradient (step skipped)
 
     if w_supcon > 0 and train_mode:
         batch_iter = subject_grouped_batch_generator(dataset, batch_size)
@@ -579,25 +580,43 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     run_model_tso_h5._warned_nan_loss = True
             else:
                 total_loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                scheduler.step()
+                # clip_grad_norm_ returns the PRE-clip total norm. A finite loss
+                # can still yield a NaN/Inf gradient (e.g. backward through a
+                # fully-masked / sub-minute segment, or an unstable attention).
+                # Stepping then scales EVERY weight by a NaN clip coefficient and
+                # poisons the whole model (that is what froze the run: batch 1
+                # stepped on a NaN grad, then all later batches were NaN). So skip
+                # the step whenever the gradient is non-finite.
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), max_norm=1.0, error_if_nonfinite=False)
+                if torch.isfinite(grad_norm):
+                    optimizer.step()
+                    scheduler.step()
 
-                # --- ELR memory update --------------------------------------
-                # Refresh per-segment EMA of predictions even during ELR warmup
-                # (i.e., when w_elr == 0 but memory is provided) so the target
-                # is meaningful as soon as the loss term kicks in.
-                if elr_memory is not None:
-                    with torch.no_grad():
-                        if outputs.shape[-1] == 1:
-                            probs_for_mem = torch.sigmoid(outputs[..., 0]).cpu().numpy()
-                        else:
-                            probs_for_mem = torch.softmax(outputs, dim=-1).cpu().numpy()
-                    segment_ids = np.array(
-                        [s.get('segment_id', i) for i, s in enumerate(batch_samples)],
-                        dtype=np.int64,
-                    )
-                    elr_memory.update(segment_ids, probs_for_mem)
+                    # --- ELR memory update ----------------------------------
+                    # Refresh per-segment EMA of predictions even during ELR
+                    # warmup (w_elr == 0 but memory provided) so the target is
+                    # meaningful as soon as the loss term kicks in.
+                    if elr_memory is not None:
+                        with torch.no_grad():
+                            if outputs.shape[-1] == 1:
+                                probs_for_mem = torch.sigmoid(outputs[..., 0]).cpu().numpy()
+                            else:
+                                probs_for_mem = torch.softmax(outputs, dim=-1).cpu().numpy()
+                        segment_ids = np.array(
+                            [s.get('segment_id', i) for i, s in enumerate(batch_samples)],
+                            dtype=np.int64,
+                        )
+                        elr_memory.update(segment_ids, probs_for_mem)
+                else:
+                    # Finite loss but NaN/Inf gradient: stepping would scale every
+                    # weight by a NaN clip coefficient and poison the model. Skip.
+                    nan_grad_batches += 1
+                    if not getattr(run_model_tso_h5, "_warned_nan_grad", False):
+                        print("  [warn] finite loss but non-finite GRADIENT; skipping step "
+                              "to avoid poisoning all weights. Usually backward through a "
+                              "fully-masked/sub-minute segment — run the seq_length<1200 check.")
+                        run_model_tso_h5._warned_nan_grad = True
 
         # Record loss (skip non-finite so the reported average stays meaningful)
         loss_val = total_loss.item()
@@ -691,6 +710,11 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         print(f"  [warn] {nonfinite_batches}/{batches} batches had non-finite loss "
               f"and were skipped — the model is NOT training on those. If this is most "
               f"of them, fix the NaN source (scale the input) before reading metrics.")
+    if nan_grad_batches > 0:
+        print(f"  [warn] {nan_grad_batches}/{batches} batches had a non-finite GRADIENT "
+              f"(finite loss) and their step was skipped. If most batches, the model "
+              f"isn't learning — suspect sub-minute segments or the cross-attention path "
+              f"(try skip_cross_attention=False in the config).")
 
     f1_tso = f1_score(all_labels_tso, (all_preds_tso > 0.5).astype(int), zero_division=0)
 

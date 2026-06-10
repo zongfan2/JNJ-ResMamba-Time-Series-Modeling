@@ -417,6 +417,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     all_labels_nonwear = []
     # Per-sample label-free TSO interval records (onset/offset/duration/segments).
     interval_records = []
+    nonfinite_batches = 0   # batches whose loss was NaN/Inf (model not learning if high)
 
     if w_supcon > 0 and train_mode:
         batch_iter = subject_grouped_batch_generator(dataset, batch_size)
@@ -567,8 +568,14 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                 # optimizer.step() and freeze the entire run. Skip this batch
                 # (weights unchanged) instead of poisoning the model.
                 if not getattr(run_model_tso_h5, "_warned_nan_loss", False):
-                    print("  [warn] non-finite loss; skipping optimizer step for "
-                          "affected batches (weights unchanged). Check input data / lr.")
+                    input_finite = bool(torch.isfinite(pad_X).all())
+                    logits_finite = bool(torch.isfinite(outputs).all())
+                    print(f"  [warn] non-finite loss; skipping optimizer step. "
+                          f"input_finite={input_finite} logits_finite={logits_finite} "
+                          f"logit_min={float(outputs.min())} logit_max={float(outputs.max())}. "
+                          f"logits_finite=False with input_finite=True => the MODEL is "
+                          f"emitting NaN (almost always unscaled input — rebuild the H5 "
+                          f"with a scaler). A per-epoch skipped-batch count is printed below.")
                     run_model_tso_h5._warned_nan_loss = True
             else:
                 total_loss.backward()
@@ -596,6 +603,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         loss_val = total_loss.item()
         if np.isfinite(loss_val):
             epoch_loss += loss_val
+        else:
+            nonfinite_batches += 1
         batches += 1
 
         # Get predictions
@@ -672,9 +681,16 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     all_labels_tso = np.array(all_labels_tso)
 
     # Calculate metrics
-    avg_loss = epoch_loss / batches if batches > 0 else 0
-    avg_class_loss = epoch_class_loss / batches if batches > 0 else 0
-    avg_cont_loss = epoch_cont_loss / batches if batches > 0 else 0
+    # Average over batches that produced a FINITE loss (so a run where most
+    # batches NaN-out doesn't masquerade as a tiny loss). Surface the skip count.
+    finite_batches = max(batches - nonfinite_batches, 1)
+    avg_loss = epoch_loss / finite_batches
+    avg_class_loss = epoch_class_loss / finite_batches
+    avg_cont_loss = epoch_cont_loss / finite_batches
+    if nonfinite_batches > 0:
+        print(f"  [warn] {nonfinite_batches}/{batches} batches had non-finite loss "
+              f"and were skipped — the model is NOT training on those. If this is most "
+              f"of them, fix the NaN source (scale the input) before reading metrics.")
 
     f1_tso = f1_score(all_labels_tso, (all_preds_tso > 0.5).astype(int), zero_division=0)
 

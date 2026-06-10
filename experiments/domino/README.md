@@ -30,14 +30,14 @@ python3.11 test-tools/check_parquet_columns.py \
 bash experiments/domino/build_deep_tso_h5.sh
 #   -> /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5 (+ _split.npz)
 
-# 2. smoke
-export INPUT_H5=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
-export OUTPUT_ROOT=/mnt/data/GENEActive-featurized/results/DL
+# 2. smoke — paths come from the config YAML; no env vars needed
 bash experiments/domino/run_deep_tso_smoke.sh
 
-# 3. Phase-1 ablation
-export SPLIT_FILE=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+# 3. Phase-1 ablation — likewise config-driven
 bash experiments/domino/run_deep_tso_ablation.sh
+
+# (optional) override the config paths for a run:
+#   INPUT_H5=/some/other.h5 OUTPUT_ROOT=/some/root bash experiments/domino/run_deep_tso_smoke.sh
 ```
 
 Run a single config. `input_h5`, `split_file`, `output`, and `output_root` all come

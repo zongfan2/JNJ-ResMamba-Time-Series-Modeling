@@ -663,25 +663,16 @@ See `project_overview.md` for training concepts and `algorithms.md` for post-pro
 
 ## Deep TSO Noisy-Label Domino Jobs
 
-Full Deep TSO experiments are intended to run on Domino because the local machine does not have the required training data and GPU/runtime stack.
-
-Smoke test:
+Full Deep TSO experiments are intended to run on Domino because the local machine does not have the required training data and GPU/runtime stack. See `experiments/domino/README.md` for the full runbook. The H5 path / split / output root all come from the config YAMLs, so the run scripts need no env vars (export `INPUT_H5`/`SPLIT_FILE`/`OUTPUT_ROOT` only to override).
 
 ```bash
-export INPUT_H5=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
-export OUTPUT_ROOT=/mnt/data/GENEActive-featurized/results/DL
+# one-time deps + build the labelled TSO H5 from GENEActive production parquet
 bash experiments/domino/deep_tso_setup.sh
+python3.11 test-tools/check_parquet_columns.py \
+  --input_folder /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
+bash experiments/domino/build_deep_tso_h5.sh
+
+# smoke (after every code change), then the phase-1 ablation
 bash experiments/domino/run_deep_tso_smoke.sh
-```
-
-Ablation:
-
-```bash
-export INPUT_H5=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
-export SPLIT_FILE=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
-export OUTPUT_ROOT=/mnt/data/GENEActive-featurized/results/DL
-bash experiments/domino/deep_tso_setup.sh
 bash experiments/domino/run_deep_tso_ablation.sh
 ```
-
-Use the smoke job after every code change. Use the ablation job after the smoke job passes.

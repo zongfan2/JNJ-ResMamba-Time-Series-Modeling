@@ -23,6 +23,22 @@ def test_gce_three_class_accepts_per_position_weight():
     assert weighted <= unweighted * 4
 
 
+def test_gce_gradient_is_finite_when_model_is_confident():
+    from losses.noisy_labels import generalized_cross_entropy_loss
+
+    # Confident predictions: prob_pos -> ~1 on a NEGATIVE minute makes
+    # prob_true = 1 - prob_pos -> 0, whose pow(q-1) gradient is +inf unless clamped.
+    for logits in (
+        torch.tensor([[[30.0], [-30.0]]], requires_grad=True),                       # binary
+        torch.tensor([[[30.0, -30.0, -30.0], [-30.0, -30.0, 30.0]]], requires_grad=True),  # 3-class
+    ):
+        labels = torch.tensor([[0, 2]])
+        loss = generalized_cross_entropy_loss(logits, labels, q=0.7)
+        loss.backward()
+        assert torch.isfinite(loss)
+        assert torch.isfinite(logits.grad).all()
+
+
 def test_consensus_confidence_from_annotator_votes():
     from losses.noisy_labels import consensus_from_annotators
 

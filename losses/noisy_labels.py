@@ -28,6 +28,13 @@ def generalized_cross_entropy_loss(
         probs = torch.softmax(outputs, dim=-1).clamp(min=1e-7, max=1.0)
         prob_true = probs.gather(dim=-1, index=safe_labels.unsqueeze(-1)).squeeze(-1)
 
+    # Bound prob_true away from 0 BEFORE the power: the GCE gradient is
+    # proportional to prob_true**(q-1), which is +inf at prob_true==0. In the
+    # binary branch `1 - prob_pos` can hit exactly 0 (prob_pos clamped to 1.0)
+    # once the model is confident on a negative minute, producing NaN gradients
+    # that freeze training. Clamping here keeps the gradient finite.
+    prob_true = prob_true.clamp(min=1e-7, max=1.0)
+
     loss = (1.0 - prob_true.pow(q)) / q
     loss = loss.masked_fill(~valid, 0.0)
 

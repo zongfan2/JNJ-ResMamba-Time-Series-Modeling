@@ -26,7 +26,8 @@ python3.11 test-tools/check_parquet_columns.py \
 #   exit 0 => predictTSO & non-wear present in all sampled files
 
 # 1. build the TSO training H5 (+ split) from the labelled GENEActive production data
-#    scaler optional: set SCALER_PATH to match how prior models were trained
+#    scaler defaults to the SAME one Deep Scratch uses (UKB_v2/mbav1_scaler.joblib);
+#    override with SCALER_PATH=... or SCALER_PATH="" to disable.
 bash experiments/domino/build_deep_tso_h5.sh
 #   -> /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5 (+ _split.npz)
 

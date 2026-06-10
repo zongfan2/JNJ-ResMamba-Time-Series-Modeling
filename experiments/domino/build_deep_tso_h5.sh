@@ -23,9 +23,13 @@ set -euo pipefail
 : "${RAW_DIR:=/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/}"
 : "${OUTPUT_H5:=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5}"
 : "${VAL_SIZE:=0.1}"
-# Leave SCALER_PATH empty for no scaling; set it to reuse the scaler the prior
-# TSO/scratch models were trained with (e.g. .../std_scaler_3s.bin).
-: "${SCALER_PATH:=}"
+# Scaler applied to x,y,z at build time. Default = the SAME scaler the Deep
+# Scratch experiment uses on this exact data (scratch_mbav1_deepscratch.yaml),
+# so the TSO H5 shares Deep Scratch's input representation and stays comparable
+# for the downstream scratch proxy. (NOT std_scaler_3s.bin — that's only
+# train_scratch.py's fallback default, which the experiment overrides.)
+# Set SCALER_PATH="" to disable scaling.
+: "${SCALER_PATH:=/mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib}"
 
 mkdir -p "$(dirname "${OUTPUT_H5}")"
 

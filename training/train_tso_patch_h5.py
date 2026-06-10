@@ -45,6 +45,11 @@ import time
 import h5py
 import yaml
 
+# Make the repo root importable so `from models/data/losses ...` works regardless
+# of the cwd or whether `pip install -e .` succeeded (the shell_script above can
+# `cd` to the wrong place on nested Domino checkouts).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from models import setup_model
 from data import (
     add_padding_tso_patch_h5,

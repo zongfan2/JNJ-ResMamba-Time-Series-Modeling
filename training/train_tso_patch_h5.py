@@ -15,8 +15,15 @@ Key Differences from Parquet Version:
 - Direct memory-mapped access to preprocessed data
 - Significantly faster training (10-100x speedup expected)
 """
-# Domino dependency installation is handled by experiments/domino/deep_tso_setup.sh.
-# Keep training modules importable without mutating the environment.
+import subprocess
+
+shell_script = '''
+cd munge/predictive_modeling
+sudo python3.11 -m pip install -r requirements-tso.txt
+sudo python3.11 -m pip install -e .
+sudo python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures mamba-ssm[causal-conv1d]==2.2.2
+'''
+result = subprocess.run(shell_script, shell=True, capture_output=True, text=True)
 
 import os
 import sys

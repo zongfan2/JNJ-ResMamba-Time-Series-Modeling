@@ -23,6 +23,8 @@ This plan was reviewed against the live codebase before execution. The following
 
 6. **Config-driven `input_h5`/`output` (added post-implementation).** `--input_h5` and `--output` were `required=True`, which argparse enforces against the *command line* — so config values injected via `set_defaults` did not satisfy it. Both are now `default=None` with a post-parse `parser.error(...)` check, so `data.input_h5` / `training.output` (and the already-optional `split_file` / `output_root`) can be set entirely in the YAML; CLI flags still override.
 
+7. **Inline dependency install restored in `train_tso_patch_h5.py` (per user request, reverses Task 1 Step 5).** Because the separate `deep_tso_setup.sh` caused install trouble on Domino, the top-level `shell_script` + `subprocess.run(...)` block (matching `training/train_tso_patch.py`: `cd munge/predictive_modeling; sudo python3.11 -m pip install -r requirements-tso.txt; -e .; optuna/.../mamba-ssm`) is back at module top. Trade-off: importing the module (incl. the H5-contract / SupCon-batching pytest modules) now triggers the install — expected on Domino, matches the other trainers.
+
 **Validation scope (decided):** Phase 1 gates model selection on a *label-free* signal (cross-night interval consistency + duration/fragmentation priors), NOT on provable TSO accuracy. The report's **primary** validation — the fixed-scratch-model downstream proxy — and the small expert/PSG gold set remain in **Post-Phase Runway** by design. Task 7 and the summary template state this explicitly so Phase-1 results are read as a robustness/stability gate, not as proof of TSO improvement.
 
 ---

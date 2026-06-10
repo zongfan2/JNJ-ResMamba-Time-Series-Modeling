@@ -864,6 +864,12 @@ parser.add_argument("--use_consensus_weight", action="store_true",
                     help="Use Y_annotators agreement as per-minute supervision confidence.")
 parser.add_argument("--projection_dim", type=int, default=128,
                     help="Projection dimension for the TSO night embedding head.")
+parser.add_argument("--skip_connect", type=lambda v: str(v).lower() in ("1", "true", "yes"),
+                    default=True, help="Enable U-Net-style skip connections.")
+parser.add_argument("--skip_cross_attention",
+                    type=lambda v: str(v).lower() in ("1", "true", "yes"), default=False,
+                    help="Use the cross-attention skip path. Default False = the "
+                         "self-attention path covered by the factory test.")
 parser.add_argument("--config", type=str, default="", help="Path to YAML config file.")
 parser.add_argument("--output_root", type=str, default="/mnt/data/GENEActive-featurized/results/DL",
                     help="Root folder for Domino training outputs.")
@@ -907,6 +913,8 @@ def _apply_config_defaults(parser, argv):
         "supcon_temperature": "supcon_temperature",
         "use_consensus_weight": "use_consensus_weight",
         "projection_dim": "projection_dim",
+        "skip_connect": "skip_connect",
+        "skip_cross_attention": "skip_cross_attention",
         "w_trans": "w_trans",
         "w_dur": "w_dur",
         "w_elr": "w_elr",
@@ -986,8 +994,8 @@ best_params = {
     'norm1': 'BN',
     'norm2': 'GN',
     'output_channels': 1,  # 1=binary (TSO vs not), 3=three-class (other/non-wear/TSO)
-    'skip_connect': True,
-    'skip_cross_attention': True,
+    'skip_connect': args.skip_connect,
+    'skip_cross_attention': args.skip_cross_attention,  # default False = tested path
     'use_scaler': False,
     'pretrained_model_path': args.pretrained_model,
     'freeze_layers': args.freeze_layers,

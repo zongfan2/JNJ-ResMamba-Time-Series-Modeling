@@ -8,7 +8,7 @@ on Domino** — the local machine has no `mamba_ssm`, GPU, or training data.
 | Script | Purpose |
 |---|---|
 | `deep_tso_setup.sh` | Install Python deps (run once per workspace/job). |
-| `build_deep_tso_h5.sh` | Build the **supervised** TSO H5 (`X`/`Y`/`seq_lengths`/`segment_names`) from UKB raw parquet via `training/convert_h5.py`, plus a `_split.npz`. |
+| `build_deep_tso_h5.sh` | Build the **supervised** TSO H5 (`X`/`Y`/`seq_lengths`/`segment_names`) from the labelled **GENEActive production** parquet via `training/convert_h5.py`, plus a `_split.npz`. |
 | `run_deep_tso_smoke.sh` | 2-epoch smoke run (gce+supcon arm) to confirm the path works. |
 | `run_deep_tso_ablation.sh` | Phase-1 ablation: CE baseline → GCE → GCE+SupCon. |
 
@@ -21,11 +21,11 @@ on Domino** — the local machine has no `mamba_ssm`, GPU, or training data.
 ```bash
 # 0. deps + verify the parquet actually carries the labels
 bash experiments/domino/deep_tso_setup.sh
-python test-tools/check_parquet_columns.py \
-  --input_folder /mnt/imported/data/NocturnalScratch_Analysis/UKB_v2/raw/
+python3.11 test-tools/check_parquet_columns.py \
+  --input_folder /mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/
 #   exit 0 => predictTSO & non-wear present in all sampled files
 
-# 1. build the TSO training H5 (+ split)
+# 1. build the TSO training H5 (+ split) from the labelled GENEActive production data
 #    scaler optional: set SCALER_PATH to match how prior models were trained
 bash experiments/domino/build_deep_tso_h5.sh
 #   -> /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5 (+ _split.npz)
@@ -43,7 +43,7 @@ bash experiments/domino/run_deep_tso_ablation.sh
 Run a single config (CLI overrides YAML):
 
 ```bash
-python training/train_tso_patch_h5.py \
+python3.11 training/train_tso_patch_h5.py \
   --config experiments/configs/deep_tso_phase1_gce_supcon.yaml \
   --input_h5 "$INPUT_H5" --output my_run --output_root "$OUTPUT_ROOT" --num_gpu 0
 ```

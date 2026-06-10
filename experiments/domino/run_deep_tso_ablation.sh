@@ -14,7 +14,7 @@ configs=(
 for config in "${configs[@]}"; do
   name="$(basename "${config}" .yaml)"
   cmd=(
-    python training/train_tso_patch_h5.py
+    python3.11 training/train_tso_patch_h5.py
     --config "${config}"
     --input_h5 "${INPUT_H5}"
     --output "${name}_${DOMINO_RUN_ID:-manual}"

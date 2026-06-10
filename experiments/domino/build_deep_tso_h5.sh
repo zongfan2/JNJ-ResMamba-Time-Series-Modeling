@@ -1,25 +1,26 @@
 #!/usr/bin/env bash
 # build_deep_tso_h5.sh
 # Build the SUPERVISED Deep TSO training H5 (X / Y / seq_lengths / segment_names)
-# from UKB raw parquet, using training/convert_h5.py.
+# from the LABELLED GENEActive production parquet, using training/convert_h5.py.
 #
-# NOTE: This is NOT the same as experiments/run_preprocess_ukb.sh, which produces
-# an UNLABELLED pretraining H5 (/segments/.../x,y,z) for DINO/MAE. TSO training
-# needs the labelled, full-day contract produced here.
+# Source data: the GENEActive *production_train* set, whose parquet carries the
+# traditional-algorithm TSO labels (predictTSO from van Hees enh lth-rth, non-wear).
+# This is NOT UKB: experiments/run_preprocess_ukb.sh turns UKB into an UNLABELLED
+# pretraining H5 (/segments/.../x,y,z) for DINO/MAE; TSO training needs the
+# labelled, full-day contract produced here.
 #
-# Prerequisite: the parquet files must contain `predictTSO` and `non-wear`
-# columns (the traditional-algorithm labels). convert_h5.py silently writes
-# all-zero labels if they are absent, so verify columns on one file first:
-#   python -c "import pandas as pd; print(pd.read_parquet('<one_file>').columns.tolist())"
+# Prerequisite: verify the parquet actually has the label columns first, else
+# convert_h5.py silently writes all-zero labels:
+#   python3.11 test-tools/check_parquet_columns.py --input_folder "$RAW_DIR"
 #
 # Usage (from repo root on Domino):
 #   bash experiments/domino/build_deep_tso_h5.sh
 # Override any path via env vars:
-#   UKB_RAW=... OUTPUT_H5=... SCALER_PATH=... VAL_SIZE=0.1 bash experiments/domino/build_deep_tso_h5.sh
+#   RAW_DIR=... OUTPUT_H5=... SCALER_PATH=... VAL_SIZE=0.1 bash experiments/domino/build_deep_tso_h5.sh
 
 set -euo pipefail
 
-: "${UKB_RAW:=/mnt/imported/data/NocturnalScratch_Analysis/UKB_v2/raw/}"
+: "${RAW_DIR:=/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/}"
 : "${OUTPUT_H5:=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5}"
 : "${VAL_SIZE:=0.1}"
 # Leave SCALER_PATH empty for no scaling; set it to reuse the scaler the prior
@@ -29,8 +30,8 @@ set -euo pipefail
 mkdir -p "$(dirname "${OUTPUT_H5}")"
 
 cmd=(
-  python training/convert_h5.py
-  --input_folder "${UKB_RAW}"
+  python3.11 training/convert_h5.py
+  --input_folder "${RAW_DIR}"
   --output_h5 "${OUTPUT_H5}"
   --use_sincos True
   --create_split

@@ -19,6 +19,8 @@ This plan was reviewed against the live codebase before execution. The following
 3. **Consensus path destroys the padding mask (correctness).** `pad_Y` encodes padding as `-100` (`data/padding.py:604`) and the base loss ignores `-100` — so the plain GCE path is safe. But Task 6's `torch.where(nonwear_mask, pad_Y, consensus_labels)` overwrites `-100` with `0/2`, after which `masked_fill(pad_Y == -100, ...)` is a no-op, training on padded minutes. **Fix:** Task 6 preserves `-100` and computes the weight mask from the original padding mask.
 4. **Edit-anchor corrections.** Task 3's `data/padding.py` edits were re-verified against the live function (`Y_batch`, `num_minutes_max`, `segments_batch`, the per-minute `np.any` aggregation, and the 4-value return) and are correct as written — no change needed there. Two real anchor fixes were added elsewhere: Task 1 now threads `skip_connect`/`skip_cross_attention` through `models/setup.py` (the existing `case` block dropped them), and Task 3 fixes a pre-existing channel-count bug in `convert_h5.py:390` (`5` → `num_channels`).
 
+5. **Data source + interpreter (added post-implementation).** The supervised TSO H5 is built from the **labelled GENEActive production** parquet (`/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/`, which carries `predictTSO`/`non-wear`) via `experiments/domino/build_deep_tso_h5.sh` → `training/convert_h5.py`. This is NOT UKB — UKB is the *unlabelled pretraining* set (`run_preprocess_ukb.sh`). `test-tools/check_parquet_columns.py` guards against `convert_h5`'s silent all-zero-label fallback. All Domino scripts invoke `python3.11`. See `experiments/domino/README.md`.
+
 **Validation scope (decided):** Phase 1 gates model selection on a *label-free* signal (cross-night interval consistency + duration/fragmentation priors), NOT on provable TSO accuracy. The report's **primary** validation — the fixed-scratch-model downstream proxy — and the small expert/PSG gold set remain in **Post-Phase Runway** by design. Task 7 and the summary template state this explicitly so Phase-1 results are read as a robustness/stability gate, not as proof of TSO improvement.
 
 ---
@@ -352,11 +354,11 @@ Create `experiments/domino/deep_tso_setup.sh`:
 #!/usr/bin/env bash
 set -euo pipefail
 
-python -m pip install --upgrade pip
-python -m pip install -r requirement-ml.txt
-python -m pip install -r requirements-tso.txt
-python -m pip install -e .
-python -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures "mamba-ssm[causal-conv1d]==2.2.2"
+python3.11 -m pip install --upgrade pip
+python3.11 -m pip install -r requirement-ml.txt
+python3.11 -m pip install -r requirements-tso.txt
+python3.11 -m pip install -e .
+python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures "mamba-ssm[causal-conv1d]==2.2.2"
 ```
 
 - [ ] **Step 7: Run the factory test on Domino**
@@ -1843,7 +1845,7 @@ set -euo pipefail
 : "${INPUT_H5:?Set INPUT_H5 to the Domino H5 path}"
 : "${OUTPUT_ROOT:=/mnt/data/GENEActive-featurized/results/DL}"
 
-python training/train_tso_patch_h5.py \
+python3.11 training/train_tso_patch_h5.py \
   --config experiments/configs/deep_tso_phase1_gce_supcon.yaml \
   --input_h5 "${INPUT_H5}" \
   --output "deep_tso_smoke_${DOMINO_RUN_ID:-manual}" \
@@ -1875,7 +1877,7 @@ configs=(
 for config in "${configs[@]}"; do
   name="$(basename "${config}" .yaml)"
   cmd=(
-    python training/train_tso_patch_h5.py
+    python3.11 training/train_tso_patch_h5.py
     --config "${config}"
     --input_h5 "${INPUT_H5}"
     --output "${name}_${DOMINO_RUN_ID:-manual}"

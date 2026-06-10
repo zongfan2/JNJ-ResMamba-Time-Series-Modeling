@@ -21,6 +21,8 @@ This plan was reviewed against the live codebase before execution. The following
 
 5. **Data source + interpreter (added post-implementation).** The supervised TSO H5 is built from the **labelled GENEActive production** parquet (`/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/`, which carries `predictTSO`/`non-wear`) via `experiments/domino/build_deep_tso_h5.sh` → `training/convert_h5.py`. This is NOT UKB — UKB is the *unlabelled pretraining* set (`run_preprocess_ukb.sh`). `test-tools/check_parquet_columns.py` guards against `convert_h5`'s silent all-zero-label fallback. All Domino scripts invoke `python3.11`. See `experiments/domino/README.md`.
 
+6. **Config-driven `input_h5`/`output` (added post-implementation).** `--input_h5` and `--output` were `required=True`, which argparse enforces against the *command line* — so config values injected via `set_defaults` did not satisfy it. Both are now `default=None` with a post-parse `parser.error(...)` check, so `data.input_h5` / `training.output` (and the already-optional `split_file` / `output_root`) can be set entirely in the YAML; CLI flags still override.
+
 **Validation scope (decided):** Phase 1 gates model selection on a *label-free* signal (cross-night interval consistency + duration/fragmentation priors), NOT on provable TSO accuracy. The report's **primary** validation — the fixed-scratch-model downstream proxy — and the small expert/PSG gold set remain in **Post-Phase Runway** by design. Task 7 and the summary template state this explicitly so Phase-1 results are read as a robustness/stability gate, not as proof of TSO improvement.
 
 ---

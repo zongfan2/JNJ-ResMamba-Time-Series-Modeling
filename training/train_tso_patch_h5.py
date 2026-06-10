@@ -716,9 +716,9 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
 
 # ==================== Main Script ====================
 parser = argparse.ArgumentParser(description='TSO Status Prediction with H5 Data')
-parser.add_argument('--input_h5', type=str, required=True, help='Path to input H5 file')
+parser.add_argument('--input_h5', type=str, default=None, help='Path to input H5 file (or set data.input_h5 in --config)')
 parser.add_argument('--split_file', type=str, default=None, help='Path to train/val split file (.npz)')
-parser.add_argument('--output', type=str, required=True, help='Output folder name')
+parser.add_argument('--output', type=str, default=None, help='Output folder name (or set training.output in --config)')
 parser.add_argument('--model', type=str, default="mba4tso_patch", help='Model name')
 parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
 parser.add_argument('--num_gpu', type=str, default="0", help='GPU device ID')
@@ -847,6 +847,14 @@ def _apply_config_defaults(parser, argv):
 
 _apply_config_defaults(parser, sys.argv[1:])
 args = parser.parse_args()
+
+# input_h5 / output may come from --config (data.input_h5 / training.output) or
+# the CLI. They are not argparse-`required` because config values are injected via
+# set_defaults, which does not satisfy argparse's required check.
+if not args.input_h5:
+    parser.error("input_h5 is required: pass --input_h5 or set data.input_h5 in --config")
+if not args.output:
+    parser.error("output is required: pass --output or set training.output in --config")
 
 # ==================== Setup ====================
 # Multi-GPU setup

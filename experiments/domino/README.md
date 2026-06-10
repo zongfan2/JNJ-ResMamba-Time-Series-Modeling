@@ -40,13 +40,22 @@ export SPLIT_FILE=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.
 bash experiments/domino/run_deep_tso_ablation.sh
 ```
 
-Run a single config (CLI overrides YAML):
+Run a single config. `input_h5`, `split_file`, `output`, and `output_root` all come
+from the YAML (`data.*` / `training.*`); pass a flag only to **override** a config
+value (CLI wins over YAML):
 
 ```bash
+# fully config-driven:
 python3.11 training/train_tso_patch_h5.py \
-  --config experiments/configs/deep_tso_phase1_gce_supcon.yaml \
-  --input_h5 "$INPUT_H5" --output my_run --output_root "$OUTPUT_ROOT" --num_gpu 0
+  --config experiments/configs/deep_tso_phase1_gce_supcon.yaml --num_gpu 0
+
+# e.g. override just the output name:
+python3.11 training/train_tso_patch_h5.py \
+  --config experiments/configs/deep_tso_phase1_gce_supcon.yaml --output my_run --num_gpu 0
 ```
+
+The `run_deep_tso_*.sh` scripts still pass `--input_h5`/`--output`/`--output_root`
+via env vars on purpose (per-run output names with `DOMINO_RUN_ID`, smoke overrides).
 
 ## Notes / gotchas
 

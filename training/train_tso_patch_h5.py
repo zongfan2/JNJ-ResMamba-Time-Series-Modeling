@@ -435,6 +435,17 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         )
         load_time = time.time() - t1
 
+        # Raw accelerometry often has NaN/Inf (sensor gaps, missing temperature).
+        # A single non-finite value -> NaN logits -> NaN loss -> NaN weights after
+        # one optimizer step, which freezes the whole run. Sanitize and warn once.
+        if not torch.isfinite(pad_X).all():
+            if not getattr(run_model_tso_h5, "_warned_nan_input", False):
+                n_bad = int((~torch.isfinite(pad_X)).sum().item())
+                print(f"  [warn] non-finite values in input batch ({n_bad}); replacing "
+                      f"with {padding_value}. Clean the H5 (rebuild) or apply a scaler.")
+                run_model_tso_h5._warned_nan_input = True
+            pad_X = torch.nan_to_num(pad_X, nan=float(padding_value), posinf=0.0, neginf=0.0)
+
         # if batches == 0:
         #     print(f"First batch loading time: {load_time:.4f}s")
 
@@ -551,29 +562,40 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         # Backward pass if training
         if train_mode:
             optimizer.zero_grad()
-            total_loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
-            scheduler.step()
+            if not torch.isfinite(total_loss):
+                # A non-finite loss would write NaN/Inf into the weights on
+                # optimizer.step() and freeze the entire run. Skip this batch
+                # (weights unchanged) instead of poisoning the model.
+                if not getattr(run_model_tso_h5, "_warned_nan_loss", False):
+                    print("  [warn] non-finite loss; skipping optimizer step for "
+                          "affected batches (weights unchanged). Check input data / lr.")
+                    run_model_tso_h5._warned_nan_loss = True
+            else:
+                total_loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                scheduler.step()
 
-            # --- ELR memory update --------------------------------------
-            # Refresh per-segment EMA of predictions even during ELR warmup
-            # (i.e., when w_elr == 0 but memory is provided) so the target
-            # is meaningful as soon as the loss term kicks in.
-            if elr_memory is not None:
-                with torch.no_grad():
-                    if outputs.shape[-1] == 1:
-                        probs_for_mem = torch.sigmoid(outputs[..., 0]).cpu().numpy()
-                    else:
-                        probs_for_mem = torch.softmax(outputs, dim=-1).cpu().numpy()
-                segment_ids = np.array(
-                    [s.get('segment_id', i) for i, s in enumerate(batch_samples)],
-                    dtype=np.int64,
-                )
-                elr_memory.update(segment_ids, probs_for_mem)
+                # --- ELR memory update --------------------------------------
+                # Refresh per-segment EMA of predictions even during ELR warmup
+                # (i.e., when w_elr == 0 but memory is provided) so the target
+                # is meaningful as soon as the loss term kicks in.
+                if elr_memory is not None:
+                    with torch.no_grad():
+                        if outputs.shape[-1] == 1:
+                            probs_for_mem = torch.sigmoid(outputs[..., 0]).cpu().numpy()
+                        else:
+                            probs_for_mem = torch.softmax(outputs, dim=-1).cpu().numpy()
+                    segment_ids = np.array(
+                        [s.get('segment_id', i) for i, s in enumerate(batch_samples)],
+                        dtype=np.int64,
+                    )
+                    elr_memory.update(segment_ids, probs_for_mem)
 
-        # Record loss
-        epoch_loss += total_loss.item()
+        # Record loss (skip non-finite so the reported average stays meaningful)
+        loss_val = total_loss.item()
+        if np.isfinite(loss_val):
+            epoch_loss += loss_val
         batches += 1
 
         # Get predictions
@@ -1318,11 +1340,17 @@ for iteration in range(args.training_iterations):
                 }, model_path)
                 print(f"  -> Saved best model at epoch {epoch}")
 
-        # Load best model
+        # Load best model if one was saved. A degenerate run (e.g. no epoch ever
+        # improved the selection score) leaves no checkpoint — fall back to the
+        # current in-memory weights instead of crashing on a missing file.
         checkpoint_path = os.path.join(train_models_folder, f"best_model_iter_{iteration}.pt")
-        checkpoint = torch.load(checkpoint_path)
-        model_to_load = model.module if isinstance(model, torch.nn.DataParallel) else model
-        model_to_load.load_state_dict(checkpoint['model_state_dict'])
+        if os.path.exists(checkpoint_path):
+            checkpoint = torch.load(checkpoint_path)
+            model_to_load = model.module if isinstance(model, torch.nn.DataParallel) else model
+            model_to_load.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            print(f"  [warn] no best-model checkpoint at {checkpoint_path} "
+                  f"(no epoch improved the selection score); using current weights.")
         model.eval()
 
     # Test evaluation

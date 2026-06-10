@@ -389,6 +389,11 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
                     segment_data['time_sin']
                 ], axis=1).astype(np.float32)  # [seq_len, 5]
 
+            # Raw accelerometry/temperature has NaN/Inf during gaps and non-wear.
+            # Clean it here so the H5 (and thus training) never sees non-finite
+            # values, which would otherwise produce NaN loss and freeze training.
+            X_seg = np.nan_to_num(X_seg, nan=0.0, posinf=0.0, neginf=0.0)
+
             # Pad to max_len
             if seg_len < max_len:
                 padding = np.zeros((max_len - seg_len, num_channels), dtype=np.float32)

@@ -17,12 +17,22 @@
 #   bash experiments/domino/build_deep_tso_h5.sh
 # Override any path via env vars:
 #   RAW_DIR=... OUTPUT_H5=... SCALER_PATH=... VAL_SIZE=0.1 bash experiments/domino/build_deep_tso_h5.sh
+#
+# PHASE 2 (consensus): also store per-algorithm TSO tracks as Y_annotators by
+# listing >=2 binary per-row TSO columns. They must be DIFFERENT algorithms'
+# predictions (e.g. Sadeh, Cole-Kripke, van Hees) — not a ground-truth column.
+#   ANNOTATOR_COLUMNS="predictTSO,sadeh,cole_kripke" \
+#   OUTPUT_H5=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_consensus.h5 \
+#   bash experiments/domino/build_deep_tso_h5.sh
 
 set -euo pipefail
 
 : "${RAW_DIR:=/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/}"
 : "${OUTPUT_H5:=/mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5}"
 : "${VAL_SIZE:=0.1}"
+# Comma-separated binary per-row TSO label columns -> stored as Y_annotators for
+# Phase-2 consensus. Empty = Phase-1 H5 (no annotator tracks).
+: "${ANNOTATOR_COLUMNS:=}"
 # Scaler applied to x,y,z at build time. Default = the SAME scaler the Deep
 # Scratch experiment uses on this exact data (scratch_mbav1_deepscratch.yaml),
 # so the TSO H5 shares Deep Scratch's input representation and stays comparable
@@ -44,7 +54,10 @@ cmd=(
 if [[ -n "${SCALER_PATH}" ]]; then
   cmd+=(--scaler_path "${SCALER_PATH}")
 fi
+if [[ -n "${ANNOTATOR_COLUMNS}" ]]; then
+  cmd+=(--annotator_columns "${ANNOTATOR_COLUMNS}")
+fi
 
-echo "Building TSO H5: ${OUTPUT_H5}"
+echo "Building TSO H5: ${OUTPUT_H5}${ANNOTATOR_COLUMNS:+  (annotators: ${ANNOTATOR_COLUMNS})}"
 "${cmd[@]}"
 echo "Done. Split file: ${OUTPUT_H5%.h5}_split.npz"

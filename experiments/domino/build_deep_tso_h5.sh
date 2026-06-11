@@ -38,8 +38,9 @@ set -euo pipefail
 # so the TSO H5 shares Deep Scratch's input representation and stays comparable
 # for the downstream scratch proxy. (NOT std_scaler_3s.bin — that's only
 # train_scratch.py's fallback default, which the experiment overrides.)
-# Set SCALER_PATH="" to disable scaling.
-: "${SCALER_PATH:=/mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib}"
+# Set SCALER_PATH="" to disable scaling (note: '=' not ':=' so an explicit
+# empty value is respected rather than re-filled with the default).
+: "${SCALER_PATH=/mnt/data/GENEActive-featurized/results/DL/UKB_v2/mbav1_scaler.joblib}"
 
 mkdir -p "$(dirname "${OUTPUT_H5}")"
 

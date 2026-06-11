@@ -42,12 +42,17 @@ TSO_KEYS = [
 def find_files(paths):
     out = []
     for p in paths:
-        if os.path.isdir(p):
-            out += glob.glob(os.path.join(p, "**", "results_iter_*.joblib"), recursive=True)
-        elif any(c in p for c in "*?["):
-            out += glob.glob(p, recursive=True)
-        else:
-            out.append(p)
+        is_glob = any(c in p for c in "*?[")
+        # Expand globs first; a glob like ".../deep_tso_phase1_*" matches the RUN
+        # DIRECTORIES, so each match still has to be recursed into.
+        candidates = glob.glob(p, recursive=True) if is_glob else [p]
+        for c in candidates:
+            if os.path.isdir(c):
+                out += glob.glob(os.path.join(c, "**", "results_iter_*.joblib"), recursive=True)
+            elif os.path.isfile(c):
+                # keep literal file args as-is; from a glob keep only .joblib files
+                if c.endswith(".joblib") or not is_glob:
+                    out.append(c)
     return sorted(set(out))
 
 

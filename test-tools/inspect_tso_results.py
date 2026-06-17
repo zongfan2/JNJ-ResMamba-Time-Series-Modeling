@@ -62,6 +62,49 @@ def run_name(path):
     return os.path.basename(d) or path
 
 
+def save_loss_curve(path, data):
+    """Write a train/val loss curve (with best-epoch marker) into the run's
+    learning_plots/ folder, from the saved history. Returns the PNG path or None.
+
+    Post-hoc companion to training/train_tso_patch_h5.py's plot_tso_learning_curves
+    (which only runs during training): regenerates the loss curve from any saved
+    results_iter_*.joblib, including --test_only runs.
+    """
+    history = (data.get("history") or {}) if isinstance(data, dict) else {}
+    tl = history.get("train_loss") or []
+    vl = history.get("val_loss") or []
+    if not tl and not vl:
+        return None
+    import matplotlib
+    matplotlib.use("Agg")  # headless (Domino)
+    import matplotlib.pyplot as plt
+
+    # .../<RUN>/training/predictions/results_iter_N.joblib -> .../<RUN>/training/learning_plots/
+    out_dir = os.path.join(os.path.dirname(os.path.dirname(path)), "learning_plots")
+    os.makedirs(out_dir, exist_ok=True)
+    out = os.path.join(out_dir, f"loss_curve_iter_{data.get('iteration', 0)}.png")
+
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    if tl:
+        ax.plot(range(1, len(tl) + 1), tl, label="train", linewidth=2, color="#1f77b4")
+    if vl:
+        ax.plot(range(1, len(vl) + 1), vl, label="val", linewidth=2, color="#ff7f0e")
+    sel = history.get("val_selection_score") or vl
+    finite = [(i, s) for i, s in enumerate(sel) if s is not None and np.isfinite(s)]
+    if finite:
+        best = min(finite, key=lambda t: t[1])[0]
+        ax.axvline(best + 1, color="gray", linestyle="--", alpha=0.6, label=f"best epoch {best + 1}")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("loss")
+    ax.set_title(f"{run_name(path)} — loss")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(out, dpi=150)
+    plt.close(fig)
+    return out
+
+
 def fmt(v):
     if v is None:
         return "-"
@@ -107,7 +150,7 @@ def history_summary(hist):
                 print(f"    {k:24s} best={fmt(seq[best])}  last={fmt(seq[-1])}")
 
 
-def inspect(path):
+def inspect(path, save_plots=False):
     print("=" * 78)
     print(run_name(path))
     print(path)
@@ -146,6 +189,9 @@ def inspect(path):
               f"gt-has-TSO: {fmt(tm.get('gt_gt_has_tso_rate'))}")
 
     history_summary(data.get("history", {}))
+    if save_plots:
+        png = save_loss_curve(path, data)
+        print(f"  loss curve -> {png}" if png else "  loss curve -> (no train/val loss in history)")
     print()
     return {
         "run": run_name(path),
@@ -182,6 +228,8 @@ def print_comparison(rows):
 def main():
     ap = argparse.ArgumentParser(description="Inspect Deep TSO results_iter_*.joblib")
     ap.add_argument("paths", nargs="*", help="joblib files, globs, or run/results dirs")
+    ap.add_argument("--plots", action="store_true",
+                    help="Write a train/val loss curve PNG into each run's learning_plots/ folder.")
     args = ap.parse_args()
     paths = args.paths or [DEFAULT_ROOT]
 
@@ -193,7 +241,7 @@ def main():
     rows = []
     for f in files:
         try:
-            row = inspect(f)
+            row = inspect(f, save_plots=args.plots)
             if row:
                 rows.append(row)
         except Exception as e:

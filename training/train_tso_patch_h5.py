@@ -36,7 +36,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
-from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score, balanced_accuracy_score
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -73,7 +73,7 @@ from evaluation.postprocessing import batch_enforce_single_tso
 from losses.standard import EarlyStopping
 from evaluation.metrics import calculate_metrics_nn, plot_tso_learning_curves
 from evaluation.postprocessing import smooth_predictions, smooth_predictions_combined
-from evaluation.tso_validation import extract_tso_interval, cross_night_consistency
+from evaluation.tso_validation import extract_tso_interval, cross_night_consistency, interval_agreement
 
 
 # ==================== H5 Dataset Class ====================
@@ -420,6 +420,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     all_labels_nonwear = []
     # Per-sample label-free TSO interval records (onset/offset/duration/segments).
     interval_records = []
+    gt_records = []        # per-night {"model": interval_agreement, "vanhees": interval_agreement}
+    gt_pm, model_pm, vanhees_pm = [], [], []   # aligned per-minute GT / model / van Hees (0/1)
     nonfinite_batches = 0   # batches whose loss was NaN/Inf (model not learning if high)
     nan_grad_batches = 0    # batches with finite loss but NaN/Inf gradient (step skipped)
 
@@ -431,13 +433,14 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         t1 = time.time()
 
         # Prepare batch
-        pad_X, pad_Y, x_lens, batch_samples, pad_Y_annotators = add_padding_tso_patch_h5(
+        pad_X, pad_Y, x_lens, batch_samples, pad_Y_annotators, pad_Y_gt = add_padding_tso_patch_h5(
             dataset, batch_indices, device,
             max_seq_len=max_seq_len,
             patch_size=patch_size,
             padding_value=padding_value,
             num_channels=dataset.num_channels
         )
+        pad_Y_raw = pad_Y.clone()  # van Hees predictTSO, before any Phase-2 consensus relabel
         load_time = time.time() - t1
 
         # Raw accelerometry often has NaN/Inf (sensor gaps, missing temperature).
@@ -677,6 +680,19 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             interval["subject"] = batch_samples[i]["subject"]
             interval_records.append(interval)
 
+            if pad_Y_gt is not None:
+                gt_seq = pad_Y_gt[i, :valid_len].cpu().numpy().astype(int)
+                vanhees_seq = (pad_Y_raw[i, :valid_len] == 2).cpu().numpy().astype(int)
+                tso_class = 2 if num_out_channels > 1 else 1
+                model_bin = (pred_seq == tso_class).astype(int)
+                gt_records.append({
+                    "model": interval_agreement(pred_seq, gt_seq, timestep_minutes=1.0),
+                    "vanhees": interval_agreement(vanhees_seq, gt_seq, timestep_minutes=1.0),
+                })
+                gt_pm.extend(gt_seq.tolist())
+                model_pm.extend(model_bin.tolist())
+                vanhees_pm.extend(vanhees_seq.tolist())
+
             valid_mask = valid_labels >= 0  # exclude padding (-100)
 
             if num_out_channels == 1:
@@ -780,6 +796,26 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             **consistency,
         })
     predictions["interval_records"] = interval_records
+
+    if gt_records:
+        def _nanmean(key, who):
+            vals = [r[who][key] for r in gt_records if not np.isnan(r[who][key])]
+            return float(np.mean(vals)) if vals else float("nan")
+        for who, tag in (("model", "gt_model"), ("vanhees", "gt_vanhees")):
+            metrics[f"{tag}_onset_mae_min"] = _nanmean("onset_mae_min", who)
+            metrics[f"{tag}_offset_mae_min"] = _nanmean("offset_mae_min", who)
+            metrics[f"{tag}_duration_err_h"] = _nanmean("duration_err_h", who)
+            iou_vals = [r[who]["iou"] for r in gt_records if not np.isnan(r[who]["iou"])]
+            metrics[f"{tag}_iou"] = float(np.mean(iou_vals)) if iou_vals else float("nan")
+        gt_arr = np.array(gt_pm); model_arr = np.array(model_pm); vh_arr = np.array(vanhees_pm)
+        metrics["gt_model_f1"] = f1_score(gt_arr, model_arr, zero_division=0)
+        metrics["gt_vanhees_f1"] = f1_score(gt_arr, vh_arr, zero_division=0)
+        metrics["gt_model_balacc"] = float(balanced_accuracy_score(gt_arr, model_arr))
+        metrics["gt_vanhees_balacc"] = float(balanced_accuracy_score(gt_arr, vh_arr))
+        metrics["gt_n_nights_both_tso"] = int(sum(
+            1 for r in gt_records if r["model"]["pred_has_tso"] and r["model"]["gt_has_tso"]))
+        metrics["gt_pred_has_tso_rate"] = float(np.mean([r["model"]["pred_has_tso"] for r in gt_records]))
+        metrics["gt_gt_has_tso_rate"] = float(np.mean([r["model"]["gt_has_tso"] for r in gt_records]))
 
     if verbose:
         extra = "" if num_out_channels == 1 else (

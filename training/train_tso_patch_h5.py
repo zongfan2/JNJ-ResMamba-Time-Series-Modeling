@@ -123,6 +123,7 @@ class H5Dataset:
         self.segment_names = self.h5f['segment_names'][:]  # Load names into RAM
         self.subject_ids = self.h5f["subject_ids"][:] if "subject_ids" in self.h5f else None
         self.Y_annotators = self.h5f["Y_annotators"] if "Y_annotators" in self.h5f else None
+        self.Y_gt = self.h5f["Y_gt"] if "Y_gt" in self.h5f else None
 
         subjects = []
         for idx in self.indices:
@@ -163,6 +164,8 @@ class H5Dataset:
         }
         if self.Y_annotators is not None:
             sample["Y_annotators"] = self.Y_annotators[actual_idx]
+        if self.Y_gt is not None:
+            sample["Y_gt"] = self.Y_gt[actual_idx]
         return sample
 
     def close(self):

@@ -580,6 +580,8 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
     segments_batch = []
     annotator_batch = []
     has_annotators = False
+    gt_batch = []
+    has_gt = False
 
     for idx in batch_indices:
         sample = dataset[idx]
@@ -597,6 +599,9 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
         if "Y_annotators" in sample:
             has_annotators = True
             annotator_batch.append(sample["Y_annotators"])
+        if "Y_gt" in sample:
+            has_gt = True
+            gt_batch.append(sample["Y_gt"])
 
     X_batch = np.stack(X_batch)  # [batch_size, max_len, num_channels]
     Y_batch = np.stack(Y_batch)  # [batch_size, max_len, 2]
@@ -614,6 +619,10 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
         annotator_batch = np.stack(annotator_batch)
         num_annotators = annotator_batch.shape[-1]
         pad_Y_annotators = np.zeros((batch_size, num_minutes_max, num_annotators), dtype=np.int8)
+    pad_Y_gt = None
+    if has_gt:
+        gt_arr = np.stack(gt_batch)  # [batch, max_len]
+        pad_Y_gt = np.zeros((batch_size, num_minutes_max), dtype=np.int64)
     x_lens = np.zeros(batch_size, dtype=np.int64)
 
     for i in range(batch_size):
@@ -650,14 +659,20 @@ def add_padding_tso_patch_h5(dataset, batch_indices, device, max_seq_len=1440,
                     annotator_minute = annotator_batch[i, m * patch_size:(m + 1) * patch_size, :]
                     pad_Y_annotators[i, m, :] = np.any(annotator_minute, axis=0).astype(np.int8)
 
+                if pad_Y_gt is not None:
+                    gt_minute = gt_arr[i, m * patch_size:(m + 1) * patch_size]
+                    pad_Y_gt[i, m] = int(np.any(gt_minute))
+
     # Convert to torch tensors
     pad_X = torch.from_numpy(pad_X).to(device)
     pad_Y = torch.from_numpy(pad_Y).to(device)
     x_lens = torch.from_numpy(x_lens).to(device)
     if pad_Y_annotators is not None:
         pad_Y_annotators = torch.from_numpy(pad_Y_annotators).to(device)
+    if pad_Y_gt is not None:
+        pad_Y_gt = torch.from_numpy(pad_Y_gt).to(device)
 
-    return pad_X, pad_Y, x_lens, segments_batch, pad_Y_annotators
+    return pad_X, pad_Y, x_lens, segments_batch, pad_Y_annotators, pad_Y_gt
 
 
 # ==================== Prediction Smoothing Functions ====================

@@ -656,7 +656,7 @@ def run_model_tso_patch_dlrtc_warmup(model, dataset, batch_size, train_mode, dev
     for batch_indices in batch_generator_h5(dataset, batch_size=batch_size, shuffle=train_mode):
 
         # Prepare batch data
-        pad_X, pad_Y, x_lens, batch_samples, _ = add_padding_tso_patch_h5(
+        pad_X, pad_Y, x_lens, batch_samples, _, _ = add_padding_tso_patch_h5(
             dataset, batch_indices, device,
             max_seq_len=max_seq_len,
             patch_size=patch_size,
@@ -803,7 +803,7 @@ def run_model_tso_patch_dlrtc_joint(model, dataset, batch_size, device,
     for batch_indices in batch_generator_h5(dataset, batch_size=batch_size, shuffle=True):
 
         # Prepare batch data
-        pad_X, pad_Y, x_lens, batch_samples, _ = add_padding_tso_patch_h5(
+        pad_X, pad_Y, x_lens, batch_samples, _, _ = add_padding_tso_patch_h5(
             dataset, batch_indices, device,
             max_seq_len=max_seq_len,
             patch_size=patch_size,
@@ -1010,7 +1010,7 @@ def run_model_tso_patch_dlrtc_eval(model, dataset, batch_size, device,
         for batch_indices in batch_generator_h5(dataset, batch_size=batch_size, shuffle=False):
 
             # Prepare batch data
-            pad_X, pad_Y, x_lens, batch_samples, _ = add_padding_tso_patch_h5(
+            pad_X, pad_Y, x_lens, batch_samples, _, _ = add_padding_tso_patch_h5(
                 dataset, batch_indices, device,
                 max_seq_len=max_seq_len,
                 patch_size=patch_size,

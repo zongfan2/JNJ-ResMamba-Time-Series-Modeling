@@ -8,7 +8,7 @@ model:
   projection_dim: 128
 training:
   output: deep_tso_phase2_consensus
-  output_root: /mnt/data/GENEActive-featurized/results/DL
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
   batch_size: 8   # raw-patch model is activation-heavy; 24 OOMs a 22GB GPU
   epochs: 60
   lr: 0.001

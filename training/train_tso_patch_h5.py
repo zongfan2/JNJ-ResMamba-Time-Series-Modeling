@@ -1058,8 +1058,8 @@ parser.add_argument("--skip_cross_attention",
                     help="Use the cross-attention skip path. Default False = the "
                          "self-attention path covered by the factory test.")
 parser.add_argument("--config", type=str, default="", help="Path to YAML config file.")
-parser.add_argument("--output_root", type=str, default="/mnt/data/GENEActive-featurized/results/DL",
-                    help="Root folder for Domino training outputs.")
+parser.add_argument("--output_root", type=str, default="/mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ",
+                    help="Root folder for Domino training outputs (all Deep TSO experiments live under DeepTSO-JNJ).")
 parser.add_argument("--batch_size", type=int, default=24, help="Batch size.")
 
 
@@ -1105,6 +1105,8 @@ def _apply_config_defaults(parser, argv):
         "w_trans": "w_trans",
         "w_dur": "w_dur",
         "w_elr": "w_elr",
+        "elr_beta": "elr_beta",
+        "elr_warmup_epochs": "elr_warmup_epochs",
         "boundary_tau_steps": "boundary_tau_steps",
         "enforce_single_tso": "enforce_single_tso",
         "testing": "testing",

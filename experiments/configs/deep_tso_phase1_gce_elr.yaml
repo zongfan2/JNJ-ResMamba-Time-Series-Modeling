@@ -1,5 +1,5 @@
 experiment:
-  name: deep_tso_phase1_gce
+  name: deep_tso_phase1_gce_elr
 data:
   input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
   split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
@@ -7,21 +7,27 @@ model:
   architecture: mba4tso_patch
   projection_dim: 128
 training:
-  output: deep_tso_phase1_gce
+  output: deep_tso_phase1_gce_elr
   output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
   testing: LOFO        # subject-independent CV; replaces the leaky random-by-night split (split_file ignored under LOFO)
   num_folds: 4         # used only if the H5 lacks FOLD labels (folds then derived from subject ids)
   batch_size: 8   # raw-patch model is activation-heavy; 24 OOMs a 22GB GPU
   epochs: 60
   lr: 0.001
+  # Early-Learning Regularization: anchor predictions to the early-training EMA
+  # consensus (less corrupted by noisy labels), which directly targets the late
+  # memorization collapse seen in the GCE / GCE+SupCon arms (val_f1 -> 0).
+  elr_beta: 0.7              # EMA momentum for the per-segment target
+  elr_warmup_epochs: 5       # ELR loss is 0 until this epoch; memory still accumulates
 loss:
   base_loss: gce
   gce_q: 0.7
-  # Structural priors stay OFF so this arm isolates GCE vs the CE baseline.
+  # ELR added on top of GCE (transition/duration priors stay OFF) so this arm
+  # isolates ELR's effect against the plain GCE arm.
   components:
     w_trans: 0.0
     w_dur: 0.0
-    w_elr: 0.0
+    w_elr: 0.5
     w_supcon: 0.0
 evaluation:
   enforce_single_tso: true

@@ -8,7 +8,7 @@ model:
   projection_dim: 128
 training:
   output: deep_tso_phase1_baseline
-  output_root: /mnt/data/GENEActive-featurized/results/DL
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
   testing: LOFO        # subject-independent CV; replaces the leaky random-by-night split (split_file ignored under LOFO)
   num_folds: 4         # used only if the H5 lacks FOLD labels (folds then derived from subject ids)
   batch_size: 8   # raw-patch model is activation-heavy; 24 OOMs a 22GB GPU

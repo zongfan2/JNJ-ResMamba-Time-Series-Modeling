@@ -33,6 +33,8 @@ set -euo pipefail
 # Comma-separated binary per-row TSO label columns -> stored as Y_annotators for
 # Phase-2 consensus. Empty = Phase-1 H5 (no annotator tracks).
 : "${ANNOTATOR_COLUMNS:=}"
+# Per-row GT TSO column -> stored as Y_gt for evaluation. Default inTSO; "" disables.
+: "${GT_COLUMN:=inTSO}"
 # Scaler applied to x,y,z at build time. Default = the SAME scaler the Deep
 # Scratch experiment uses on this exact data (scratch_mbav1_deepscratch.yaml),
 # so the TSO H5 shares Deep Scratch's input representation and stays comparable
@@ -57,6 +59,9 @@ if [[ -n "${SCALER_PATH}" ]]; then
 fi
 if [[ -n "${ANNOTATOR_COLUMNS}" ]]; then
   cmd+=(--annotator_columns "${ANNOTATOR_COLUMNS}")
+fi
+if [[ -n "${GT_COLUMN}" ]]; then
+  cmd+=(--gt_column "${GT_COLUMN}")
 fi
 
 echo "Building TSO H5: ${OUTPUT_H5}${ANNOTATOR_COLUMNS:+  (annotators: ${ANNOTATOR_COLUMNS})}"

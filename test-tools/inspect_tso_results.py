@@ -130,6 +130,21 @@ def inspect(path):
             if k in present_tso:
                 print(f"    {k:32s} {fmt(present_tso[k])}")
 
+    gt_keys = [k for k in tm if k.startswith("gt_")]
+    if gt_keys:
+        print("  GT (inTSO) — model vs van Hees:")
+        rows = [("onset MAE (min)", "gt_model_onset_mae_min", "gt_vanhees_onset_mae_min"),
+                ("offset MAE (min)", "gt_model_offset_mae_min", "gt_vanhees_offset_mae_min"),
+                ("IoU", "gt_model_iou", "gt_vanhees_iou"),
+                ("F1 vs GT", "gt_model_f1", "gt_vanhees_f1"),
+                ("balanced acc", "gt_model_balacc", "gt_vanhees_balacc")]
+        print(f"    {'metric':18s} {'model':>10s} {'vanHees':>10s}")
+        for name, mk, vk in rows:
+            print(f"    {name:18s} {fmt(tm.get(mk)):>10s} {fmt(tm.get(vk)):>10s}")
+        print(f"    nights both-TSO: {fmt(tm.get('gt_n_nights_both_tso'))} | "
+              f"pred-has-TSO: {fmt(tm.get('gt_pred_has_tso_rate'))} | "
+              f"gt-has-TSO: {fmt(tm.get('gt_gt_has_tso_rate'))}")
+
     history_summary(data.get("history", {}))
     print()
     return {
@@ -141,12 +156,15 @@ def inspect(path):
         "test_loss": tm.get("loss"),
         "dur_h": tm.get("mean_pred_tso_duration_hours"),
         "segs": tm.get("mean_pred_tso_segment_count"),
+        "gt_model_iou": tm.get("gt_model_iou"),
+        "gt_model_onset_mae": tm.get("gt_model_onset_mae_min"),
     }
 
 
 def print_comparison(rows):
     cols = [("run", 34), ("f1_tso", 9), ("f1_macro", 9), ("bal_acc", 9),
-            ("acc", 9), ("test_loss", 10), ("dur_h", 8), ("segs", 7)]
+            ("acc", 9), ("test_loss", 10), ("dur_h", 8), ("segs", 7),
+            ("gt_model_iou", 9), ("gt_model_onset_mae", 12)]
     print("=" * 78)
     print("COMPARISON")
     print("=" * 78)

@@ -1435,6 +1435,14 @@ for iteration in range(args.training_iterations):
             checkpoint = torch.load(checkpoint_path)
             model_to_load = model.module if isinstance(model, torch.nn.DataParallel) else model
             model_to_load.load_state_dict(checkpoint['model_state_dict'])
+        elif args.test_only:
+            # In --test_only there is no training to fall back on: an untrained
+            # (random) model would silently produce garbage metrics. Fail loudly so
+            # the user points --output at the trained run's folder (e.g. its
+            # DOMINO_RUN_ID-suffixed name) instead of evaluating random weights.
+            raise FileNotFoundError(
+                f"--test_only but no checkpoint at {checkpoint_path}. Set --output to the "
+                f"trained run's folder so the trained weights are loaded.")
         else:
             print(f"  [warn] no best-model checkpoint at {checkpoint_path} "
                   f"(no epoch improved the selection score); using current weights.")

@@ -168,6 +168,12 @@ def load_and_preprocess_segment(
             'non_wear': df['non-wear'].values.astype(np.int8) if 'non-wear' in df.columns else np.zeros(len(df), dtype=np.int8),
             'segment': segment_name,
             'subject': current_subject,
+            # Per-segment cross-validation labels (constant within a segment).
+            # PID defaults to the filename-parsed subject; FOLD is empty when the
+            # parquet has no FOLD column, signalling the trainer to derive folds
+            # from the subject id instead (see --testing LOFO in train_tso_patch_h5).
+            'pid': str(df['PID'].iloc[0]) if 'PID' in df.columns else current_subject,
+            'fold': str(df['FOLD'].iloc[0]) if 'FOLD' in df.columns else '',
             'num_samples': len(df)
         }
 
@@ -341,6 +347,12 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             dtype=dt,
         )
 
+        # Per-segment cross-validation labels (parallel to subject_ids).
+        # fold_ids may be empty strings when the source parquet has no FOLD
+        # column; the trainer then derives folds from subject ids.
+        ds_pid = h5f.create_dataset("pid_ids", shape=(num_segments,), dtype=dt)
+        ds_fold = h5f.create_dataset("fold_ids", shape=(num_segments,), dtype=dt)
+
         ds_Y_gt = None
         if gt_column:
             h5f.attrs["gt_column"] = gt_column
@@ -444,6 +456,8 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             ds_lens[idx] = seg_len
             ds_segments[idx] = segment_data['segment']
             ds_subjects[idx] = segment_data["subject"]
+            ds_pid[idx] = segment_data["pid"]
+            ds_fold[idx] = segment_data["fold"]
 
             if ds_Y_gt is not None:
                 gt_seg = segment_data["gt"]
@@ -467,6 +481,8 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             ds_lens.resize((actual_segments,))
             ds_segments.resize((actual_segments,))
             ds_subjects.resize((actual_segments,))
+            ds_pid.resize((actual_segments,))
+            ds_fold.resize((actual_segments,))
             if ds_Y_annotators is not None:
                 ds_Y_annotators.resize((actual_segments, max_len, len(annotator_columns)))
             if ds_Y_gt is not None:

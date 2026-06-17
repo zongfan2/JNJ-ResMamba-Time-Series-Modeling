@@ -36,7 +36,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from datetime import datetime
-from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score, balanced_accuracy_score
+from sklearn.metrics import classification_report, confusion_matrix, f1_score, accuracy_score, balanced_accuracy_score, roc_auc_score
 from sklearn.preprocessing import StandardScaler
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -358,6 +358,59 @@ def visualize_batch_predictions_h5(pad_X, pad_Y, predictions, x_lens, batch_samp
 
 
 # ==================== Training Function ====================
+def threshold_diagnostics(probs, labels):
+    """Separate ranking ability from threshold calibration for binary TSO.
+
+    A model can score F1=0 at the hard 0.5 threshold yet still rank TSO
+    minutes correctly: its sigmoid probabilities are simply compressed below
+    0.5 (common under class imbalance / smoothness priors). These read-only
+    diagnostics distinguish the two failure modes from the SAME continuous
+    probabilities the F1 is computed from:
+
+      - auc           : ranking quality, threshold-independent. ~0.5 => the
+                        model learned nothing; >>0.5 => it ranks but the
+                        threshold/scale is wrong (cheap fix, no retrain).
+      - best_f1       : the F1 achievable at the best single threshold.
+      - best_threshold: where that maximum occurs (==0.5 would mean 0.5 is
+                        already fine; <<0.5 confirms probability compression).
+      - pos_rate      : positive (TSO) fraction of valid minutes.
+      - pred_mean_prob: mean predicted TSO probability (collapse => near 0).
+
+    Args:
+        probs: 1-D array of continuous TSO probabilities (sigmoid outputs).
+        labels: 1-D array of 0/1 TSO labels, same length as probs.
+
+    Returns:
+        dict with the five keys above; AUC/best-threshold are NaN when only
+        one class is present (both undefined with a single label value).
+    """
+    probs = np.asarray(probs, dtype=float)
+    labels = np.asarray(labels).astype(int)
+    out = {
+        "pos_rate": float(labels.mean()) if labels.size else float("nan"),
+        "pred_mean_prob": float(probs.mean()) if probs.size else float("nan"),
+        "auc": float("nan"),
+        "best_f1": float("nan"),
+        "best_threshold": float("nan"),
+    }
+    if labels.size == 0 or labels.min() == labels.max():
+        return out  # AUC and a "best" threshold are undefined with one class
+    try:
+        out["auc"] = float(roc_auc_score(labels, probs))
+    except ValueError:
+        pass
+    # Sweep candidate thresholds at the prob quantiles (bounded, data-adaptive).
+    candidates = np.unique(np.quantile(probs, np.linspace(0.02, 0.98, 49)))
+    best_f1, best_t = 0.0, 0.5
+    for t in candidates:
+        f1 = f1_score(labels, (probs > t).astype(int), zero_division=0)
+        if f1 > best_f1:
+            best_f1, best_t = f1, float(t)
+    out["best_f1"] = float(best_f1)
+    out["best_threshold"] = best_t
+    return out
+
+
 def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, scheduler,
                     w_other=1.0, w_nonwear=1.0, w_tso=1.0,
                     max_seq_len=1440, patch_size=1200, padding_value=0.0, verbose=False,
@@ -741,13 +794,15 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         # Binary: only TSO metric
         f1_avg = f1_tso
         accuracy = np.mean((all_preds_tso > 0.5).astype(int) == all_labels_tso.astype(int))
+        diag = threshold_diagnostics(all_preds_tso, all_labels_tso)
         metrics = {
             'loss': avg_loss,
             'class_loss': avg_class_loss,
             'cont_loss': avg_cont_loss,
             'accuracy': accuracy,
             'f1_avg': f1_avg,
-            'f1_tso': f1_tso
+            'f1_tso': f1_tso,
+            **diag,
         }
         predictions = {
             'preds_tso': all_preds_tso,
@@ -769,6 +824,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         true_classes = np.argmax(all_labels_stacked, axis=1)
         accuracy = np.mean(pred_classes == true_classes)
 
+        diag = threshold_diagnostics(all_preds_tso, all_labels_tso)
         metrics = {
             'loss': avg_loss,
             'class_loss': avg_class_loss,
@@ -777,7 +833,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             'f1_avg': f1_avg,
             'f1_other': f1_other,
             'f1_nonwear': f1_nonwear,
-            'f1_tso': f1_tso
+            'f1_tso': f1_tso,
+            **diag,
         }
         predictions = {
             'preds_other': all_preds_other,
@@ -1333,11 +1390,15 @@ for iteration in range(args.training_iterations):
                 history['train_f1_nonwear'].append(train_metrics['f1_nonwear'])
 
             # Print with optional continuity loss breakdown
-            if args.continuity_weight > 0:
-                print(f"  Train - Loss: {train_metrics['loss']:.4f} (Class: {train_metrics['class_loss']:.4f}, Cont: {train_metrics['cont_loss']:.4f}), "
-                      f"Acc: {train_metrics['accuracy']:.4f}, F1 avg: {train_metrics['f1_avg']:.4f}")
+            diag_str = (f" | AUC {train_metrics.get('auc', float('nan')):.3f}"
+                        f" | best-F1 {train_metrics.get('best_f1', float('nan')):.3f}"
+                        f"@thr {train_metrics.get('best_threshold', float('nan')):.2f}"
+                        f" | mean-prob {train_metrics.get('pred_mean_prob', float('nan')):.3f}")
+            if train_metrics.get('cont_loss', 0) or train_metrics.get('class_loss', 0):
+                print(f"  Train - Loss: {train_metrics['loss']:.4f} (CE: {train_metrics['class_loss']:.4f}, priors: {train_metrics['cont_loss']:.4f}), "
+                      f"Acc: {train_metrics['accuracy']:.4f}, F1@0.5: {train_metrics['f1_avg']:.4f}{diag_str}")
             else:
-                print(f"  Train - Loss: {train_metrics['loss']:.4f}, Acc: {train_metrics['accuracy']:.4f}, F1 avg: {train_metrics['f1_avg']:.4f}")
+                print(f"  Train - Loss: {train_metrics['loss']:.4f}, Acc: {train_metrics['accuracy']:.4f}, F1@0.5: {train_metrics['f1_avg']:.4f}{diag_str}")
 
             # Validation
             if epoch % 1 == 0:
@@ -1392,11 +1453,15 @@ for iteration in range(args.training_iterations):
                     history['val_f1_nonwear'].append(val_metrics['f1_nonwear'])
 
                 # Print with optional continuity loss breakdown
-                if args.continuity_weight > 0:
-                    print(f"  Val   - Loss: {val_metrics['loss']:.4f} (Class: {val_metrics['class_loss']:.4f}, Cont: {val_metrics['cont_loss']:.4f}), "
-                          f"Acc: {val_metrics['accuracy']:.4f}, F1 avg: {val_metrics['f1_avg']:.4f}")
+                vdiag_str = (f" | AUC {val_metrics.get('auc', float('nan')):.3f}"
+                             f" | best-F1 {val_metrics.get('best_f1', float('nan')):.3f}"
+                             f"@thr {val_metrics.get('best_threshold', float('nan')):.2f}"
+                             f" | mean-prob {val_metrics.get('pred_mean_prob', float('nan')):.3f}")
+                if val_metrics.get('cont_loss', 0) or val_metrics.get('class_loss', 0):
+                    print(f"  Val   - Loss: {val_metrics['loss']:.4f} (CE: {val_metrics['class_loss']:.4f}, priors: {val_metrics['cont_loss']:.4f}), "
+                          f"Acc: {val_metrics['accuracy']:.4f}, F1@0.5: {val_metrics['f1_avg']:.4f}{vdiag_str}")
                 else:
-                    print(f"  Val   - Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.4f}, F1 avg: {val_metrics['f1_avg']:.4f}")
+                    print(f"  Val   - Loss: {val_metrics['loss']:.4f}, Acc: {val_metrics['accuracy']:.4f}, F1@0.5: {val_metrics['f1_avg']:.4f}{vdiag_str}")
 
                 # Early stopping check (uses label-free-leaning selection score).
                 early_stopping(selection_score, model)
@@ -1511,6 +1576,15 @@ for iteration in range(args.training_iterations):
     print(f"  Balanced Accuracy: {comprehensive_metrics['balanced_accuracy']:.4f}")
     print(f"  F1 (macro): {comprehensive_metrics['f1_score_macro']:.4f}")
     print(f"  F1 (weighted): {comprehensive_metrics['f1_score_weighted']:.4f}")
+    if 'auc' in test_metrics:
+        print(f"\nThreshold diagnostics (does the model rank TSO minutes, or is 0.5 just wrong?):")
+        print(f"  AUC (rank quality):     {test_metrics.get('auc', float('nan')):.4f}  "
+              f"(~0.5 = learned nothing; >>0.5 = ranks well, threshold/scale is the problem)")
+        print(f"  F1 @ 0.5 threshold:     {test_metrics.get('f1_tso', float('nan')):.4f}")
+        print(f"  best F1 @ best thr:     {test_metrics.get('best_f1', float('nan')):.4f} "
+              f"@ thr={test_metrics.get('best_threshold', float('nan')):.3f}")
+        print(f"  TSO positive rate:      {test_metrics.get('pos_rate', float('nan')):.4f}  "
+              f"| mean predicted prob: {test_metrics.get('pred_mean_prob', float('nan')):.4f}")
     print(f"{'='*80}\n")
 
     # Save results

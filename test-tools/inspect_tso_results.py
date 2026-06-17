@@ -199,6 +199,7 @@ def inspect(path, save_plots=False):
     print()
     return {
         "run": label,
+        "run_dir": run_name(path),   # untagged folder, for grouping folds
         "f1_tso": tm.get("f1_tso"),
         "f1_macro": cm.get("f1_score_macro"),
         "bal_acc": cm.get("balanced_accuracy"),
@@ -229,6 +230,43 @@ def print_comparison(rows):
         print(line)
 
 
+def print_fold_aggregates(rows):
+    """Mean +/- std across folds, grouped by run folder.
+
+    For LOFO/LOSO each held-out fold is a separate results_iter_*.joblib in the
+    SAME run folder; the headline number is the fold-averaged metric. (Also
+    covers random runs repeated over --training_iterations.)
+    """
+    groups = {}
+    order = []
+    for r in rows:
+        k = r.get("run_dir") or r.get("run")
+        if k not in groups:
+            groups[k] = []
+            order.append(k)
+        groups[k].append(r)
+    multi = [(k, groups[k]) for k in order if len(groups[k]) > 1]
+    if not multi:
+        return
+    metrics = [("f1_tso", "f1_tso"), ("f1_macro", "f1_macro"),
+               ("bal_acc", "bal_acc"), ("acc", "accuracy"),
+               ("gt_model_iou", "IoU vs GT"), ("gt_model_onset_mae", "onset MAE min")]
+    print("=" * 78)
+    print("FOLD AGGREGATES — mean +/- std across folds (per run folder)")
+    print("=" * 78)
+    for run_dir, rs in multi:
+        folds = [str(r.get("run", "")).split("[")[-1].rstrip("]") for r in rs]
+        print(f"{run_dir}  (n={len(rs)}: {', '.join(f for f in folds if f)})")
+        for key, name in metrics:
+            vals = [r.get(key) for r in rs]
+            vals = [float(v) for v in vals
+                    if isinstance(v, (int, float)) and not (isinstance(v, float) and np.isnan(v))]
+            if vals:
+                a = np.array(vals)
+                print(f"    {name:16s} {a.mean():.4f} +/- {a.std():.4f}  (n={len(vals)})")
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Inspect Deep TSO results_iter_*.joblib")
     ap.add_argument("paths", nargs="*", help="joblib files, globs, or run/results dirs")
@@ -253,6 +291,7 @@ def main():
 
     if len(rows) > 1:
         print_comparison(rows)
+        print_fold_aggregates(rows)
     return 0
 
 

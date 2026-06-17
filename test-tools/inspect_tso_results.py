@@ -151,16 +151,20 @@ def history_summary(hist):
 
 
 def inspect(path, save_plots=False):
+    data = joblib.load(path)
+    # LOFO/LOSO write one joblib per held-out fold into the SAME run folder, so
+    # tag the display label with split_tag to keep folds distinguishable.
+    tag = data.get("split_tag") if isinstance(data, dict) else None
+    label = run_name(path) + (f" [{data.get('testing', 'cv')}:{tag}]" if tag else "")
     print("=" * 78)
-    print(run_name(path))
+    print(label)
     print(path)
     print("=" * 78)
-    data = joblib.load(path)
     if not isinstance(data, dict):
         print(f"  top-level object is {type(data).__name__}, not the expected dict.")
         return None
 
-    print(f"  iteration: {data.get('iteration')}")
+    print(f"  iteration: {data.get('iteration')}" + (f"  held-out: {tag}" if tag else ""))
     tm = data.get("test_metrics", {}) or {}
     cm = data.get("comprehensive_metrics", {}) or {}
     print_metrics("test_metrics", tm)
@@ -194,7 +198,7 @@ def inspect(path, save_plots=False):
         print(f"  loss curve -> {png}" if png else "  loss curve -> (no train/val loss in history)")
     print()
     return {
-        "run": run_name(path),
+        "run": label,
         "f1_tso": tm.get("f1_tso"),
         "f1_macro": cm.get("f1_score_macro"),
         "bal_acc": cm.get("balanced_accuracy"),

@@ -411,6 +411,88 @@ def threshold_diagnostics(probs, labels):
     return out
 
 
+def build_cv_runs(input_h5, testing, num_folds, val_size, single_fold, seed=42, split_file=None):
+    """Build a list of (tag, train_idx, val_idx, test_idx) cross-validation runs.
+
+    Replaces the leaky random-by-night split (which let a subject's nights land
+    in both train and test) with subject-independent CV mirroring Deep Scratch's
+    --testing LOFO/LOSO:
+
+      - "LOFO": leave one FOLD out as the test set. Uses the H5 ``fold_ids`` if
+        present; otherwise derives ``num_folds`` folds deterministically from
+        subject ids (sorted unique subjects round-robin into FOLD1..FOLDk) so no
+        subject spans train and test.
+      - "LOSO": leave one SUBJECT out (one run per subject).
+      - "production": train and test on ALL segments (no held-out set).
+      - "random": legacy — use split_file if given else a random val carve; a
+        single run, test == val, NOT subject-independent.
+
+    For LOFO/LOSO the held-out fold/subject IS the test set; the validation set
+    (model selection / early stopping only) is a random ``val_size`` carve from
+    the remaining segments. The reported test metric is therefore on a
+    subject-independent held-out group.
+    """
+    with h5py.File(input_h5, 'r') as h5f:
+        num_segments = int(h5f.attrs['num_segments'])
+        subjects = (h5f['subject_ids'][:].astype(str)
+                    if 'subject_ids' in h5f else np.array([''] * num_segments))
+        folds = (h5f['fold_ids'][:].astype(str)
+                 if 'fold_ids' in h5f else np.array([''] * num_segments))
+    all_idx = np.arange(num_segments)
+    rng = np.random.RandomState(seed)
+
+    def _carve_val(pool):
+        shuf = np.array(sorted(pool)); rng.shuffle(shuf)
+        n_val = max(1, int(len(shuf) * val_size))
+        return np.sort(shuf[n_val:]), np.sort(shuf[:n_val])  # train, val
+
+    if testing == 'production':
+        return [('All', all_idx, all_idx, all_idx)]
+
+    if testing == 'random':
+        if split_file and os.path.exists(split_file):
+            sd = np.load(split_file)
+            tr, va = np.asarray(sd['train']), np.asarray(sd['val'])
+        else:
+            shuf = all_idx.copy(); rng.shuffle(shuf)
+            n_val = int(num_segments * val_size)
+            tr, va = np.sort(shuf[n_val:]), np.sort(shuf[:n_val])
+        return [('random', tr, va, va)]  # test == val (legacy, leaky)
+
+    # ---- subject-independent CV ----
+    if testing == 'LOSO':
+        if (subjects == '').all():
+            raise ValueError("LOSO requires subject_ids in the H5.")
+        key = subjects
+    else:  # LOFO
+        if (folds != '').any():
+            key = folds  # use the parquet's FOLD labels verbatim
+        else:
+            uniq = sorted(s for s in set(subjects.tolist()) if s != '')
+            if not uniq:
+                raise ValueError("LOFO needs fold_ids or subject_ids in the H5.")
+            subj_fold = {s: f"FOLD{(i % num_folds) + 1}" for i, s in enumerate(uniq)}
+            key = np.array([subj_fold.get(s, 'FOLD1') for s in subjects])
+            print(f"[LOFO] no FOLD labels in H5; derived {num_folds} folds from "
+                  f"{len(uniq)} subjects (round-robin).")
+
+    groups = sorted(set(key.tolist()))
+    if single_fold:
+        if single_fold not in groups:
+            raise ValueError(f"--single_fold {single_fold!r} not in {groups}")
+        groups = [single_fold]
+
+    runs = []
+    for g in groups:
+        test_idx = np.sort(all_idx[key == g])
+        remaining = all_idx[key != g]
+        if len(remaining) == 0:
+            raise ValueError(f"Held-out group {g!r} contains all segments; cannot train.")
+        train_idx, val_idx = _carve_val(remaining)
+        runs.append((str(g), train_idx, val_idx, test_idx))
+    return runs
+
+
 def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, scheduler,
                     w_other=1.0, w_nonwear=1.0, w_tso=1.0,
                     max_seq_len=1440, patch_size=1200, padding_value=0.0, verbose=False,
@@ -887,7 +969,16 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
 # ==================== Main Script ====================
 parser = argparse.ArgumentParser(description='TSO Status Prediction with H5 Data')
 parser.add_argument('--input_h5', type=str, default=None, help='Path to input H5 file (or set data.input_h5 in --config)')
-parser.add_argument('--split_file', type=str, default=None, help='Path to train/val split file (.npz)')
+parser.add_argument('--split_file', type=str, default=None, help='Path to train/val split file (.npz); only used when --testing random')
+parser.add_argument('--testing', type=str, default='random',
+                    choices=['random', 'LOFO', 'LOSO', 'production'],
+                    help='CV strategy. random=split_file/random val (legacy, NOT subject-independent); '
+                         'LOFO=leave-one-fold-out (subject-independent, matches Deep Scratch); '
+                         'LOSO=leave-one-subject-out; production=train and test on all segments.')
+parser.add_argument('--single_fold', type=str, default='',
+                    help='Restrict LOFO/LOSO to one held-out fold/subject (e.g. FOLD4) — smoke tests or per-fold Domino jobs.')
+parser.add_argument('--num_folds', type=int, default=4,
+                    help='Number of LOFO folds when the H5 has no FOLD labels (derived from subject ids).')
 parser.add_argument('--output', type=str, default=None, help='Output folder name (or set training.output in --config)')
 parser.add_argument('--model', type=str, default="mba4tso_patch", help='Model name')
 parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
@@ -1016,6 +1107,9 @@ def _apply_config_defaults(parser, argv):
         "w_elr": "w_elr",
         "boundary_tau_steps": "boundary_tau_steps",
         "enforce_single_tso": "enforce_single_tso",
+        "testing": "testing",
+        "single_fold": "single_fold",
+        "num_folds": "num_folds",
     }
     for key, arg_name in mapping.items():
         if key in flat:
@@ -1114,51 +1208,36 @@ if args.pretrained_model is not None:
 # ==================== Load H5 Data ====================
 print(f"\nLoading H5 data from: {args.input_h5}")
 
-# Load train/val split
-if args.split_file is not None and os.path.exists(args.split_file):
-    print(f"Loading split from: {args.split_file}")
-    split_data = np.load(args.split_file)
-    train_indices = split_data['train']
-    val_indices = split_data['val']
+# ---- Build cross-validation runs (subject-independent for LOFO/LOSO) ----
+cv_runs = build_cv_runs(
+    args.input_h5, args.testing, args.num_folds, args.val_size,
+    args.single_fold, seed=42, split_file=args.split_file,
+)
+# random/production preserve the --training_iterations repeat; LOFO/LOSO use the
+# folds themselves as the iterations (one held-out group per run).
+if args.testing in ('LOFO', 'LOSO'):
+    runs = cv_runs
 else:
-    print(f"No split file provided, creating random split (val_size={args.val_size})")
-    # Open H5 to get total count
-    with h5py.File(args.input_h5, 'r') as h5f:
-        num_segments = h5f.attrs['num_segments']
-
-    indices = np.arange(num_segments)
-    np.random.shuffle(indices)
-    val_count = int(num_segments * args.val_size)
-    train_indices = indices[val_count:]
-    val_indices = indices[:val_count]
-
-print(f"Train segments: {len(train_indices)}")
-print(f"Val segments: {len(val_indices)}")
-
-# Create datasets
-dataset_train = H5Dataset(args.input_h5, indices=train_indices)
-dataset_val = H5Dataset(args.input_h5, indices=val_indices)
-dataset_test = dataset_val  # Use validation set as test for now
+    runs = cv_runs * args.training_iterations
+print(f"\nTesting strategy: {args.testing} -> {len(runs)} run(s): {[r[0] for r in runs]}")
 
 max_seq_len = 1440  # 24 hours in minutes
 
-print(f"\nDataset info:")
-print(f"  Max sequence length: {dataset_train.max_seq_length}s = {max_seq_len} minutes")
-print(f"  Samples per second: {dataset_train.samples_per_second}Hz")
-print(f"  Max samples per segment: {dataset_train.max_len:,}")
-print(f"  Number of channels: {dataset_train.num_channels}")
-if dataset_train.num_channels == 6:
-    print(f"  Time encoding: Sin+Cos (unique 2D representation)")
-elif dataset_train.num_channels == 5:
-    print(f"  Time encoding: Sin only (backward compatible)")
-else:
-    print(f"  Time encoding: Unknown format")
-
-# ==================== Training Loop ====================
-for iteration in range(args.training_iterations):
+# ==================== Training / CV Loop ====================
+for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerate(runs):
     print(f"\n{'='*80}")
-    print(f"Training iteration {iteration+1}/{args.training_iterations}")
+    print(f"CV run {iteration+1}/{len(runs)}  (testing={args.testing}, held-out={split_tag})")
     print(f"{'='*80}\n")
+
+    # Per-fold datasets. For LOFO/LOSO the test set is the held-out, subject-
+    # independent group; val is a carve-out from the remaining training data
+    # (used only for model selection / early stopping).
+    dataset_train = H5Dataset(args.input_h5, indices=train_indices)
+    dataset_val = H5Dataset(args.input_h5, indices=val_indices)
+    dataset_test = H5Dataset(args.input_h5, indices=test_indices)
+    print(f"  Segments — train: {len(train_indices)}, val: {len(val_indices)}, test: {len(test_indices)}")
+    print(f"  Channels: {dataset_train.num_channels} "
+          f"({'x,y,z,temp,time_sin,time_cos' if dataset_train.num_channels == 6 else 'x,y,z,temp,time_sin'})")
 
     # Setup model
     model = setup_model(args.model, None, max_seq_len, best_params,
@@ -1590,6 +1669,8 @@ for iteration in range(args.training_iterations):
     # Save results
     results = {
         'iteration': iteration,
+        'split_tag': split_tag,        # held-out fold/subject for this CV run
+        'testing': args.testing,
         'test_metrics': test_metrics,
         'comprehensive_metrics': comprehensive_metrics,
         'history': history
@@ -1608,9 +1689,10 @@ for iteration in range(args.training_iterations):
         )
         print(f"Learning curves saved\n")
 
-# Close datasets
-dataset_train.close()
-dataset_val.close()
+    # Close this fold's datasets before the next CV run.
+    dataset_train.close()
+    dataset_val.close()
+    dataset_test.close()
 
 print(f"\n{'='*80}")
 print("Training complete!")

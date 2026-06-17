@@ -99,6 +99,7 @@ def load_and_preprocess_segment(
     samples_per_second=20,
     use_sincos=True,
     annotator_columns=None,
+    gt_column=None,
 ):
     """
     Load a single parquet file and preprocess it.
@@ -183,6 +184,11 @@ def load_and_preprocess_segment(
         if annotator_tracks:
             result["annotators"] = np.stack(annotator_tracks, axis=1)
 
+        if gt_column:
+            if gt_column not in df.columns:
+                raise ValueError(f"GT column {gt_column!r} not found in {file}")
+            result["gt"] = df[gt_column].values.astype(np.int8)
+
         return result
 
     except Exception as e:
@@ -193,7 +199,7 @@ def load_and_preprocess_segment(
 def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
                           scaler_path=None, max_seq_length=86400,
                           balance_folders=True, split_seed=42, use_sincos=True,
-                          annotator_columns=None):
+                          annotator_columns=None, gt_column=None):
     """
     Convert parquet files to H5 format with preprocessing.
 
@@ -335,6 +341,18 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             dtype=dt,
         )
 
+        ds_Y_gt = None
+        if gt_column:
+            h5f.attrs["gt_column"] = gt_column
+            ds_Y_gt = h5f.create_dataset(
+                "Y_gt",
+                shape=(num_segments, max_len),
+                dtype=np.int8,
+                chunks=(1, min(1200, max_len)),
+                compression="gzip",
+                compression_opts=4,
+            )
+
         ds_Y_annotators = None
         if annotator_columns:
             h5f.attrs["annotator_names"] = np.array(annotator_columns, dtype=dt)
@@ -360,6 +378,7 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
                 samples_per_second,
                 use_sincos=use_sincos,
                 annotator_columns=annotator_columns,
+                gt_column=gt_column,
             )
 
             if segment_data is None:
@@ -426,6 +445,12 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             ds_segments[idx] = segment_data['segment']
             ds_subjects[idx] = segment_data["subject"]
 
+            if ds_Y_gt is not None:
+                gt_seg = segment_data["gt"]
+                if seg_len < max_len:
+                    gt_seg = np.concatenate([gt_seg, np.zeros(max_len - seg_len, dtype=np.int8)])
+                ds_Y_gt[idx] = gt_seg
+
             idx += 1
 
             # Free memory and force garbage collection every 50 files
@@ -444,6 +469,8 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             ds_subjects.resize((actual_segments,))
             if ds_Y_annotators is not None:
                 ds_Y_annotators.resize((actual_segments, max_len, len(annotator_columns)))
+            if ds_Y_gt is not None:
+                ds_Y_gt.resize((actual_segments, max_len))
             h5f.attrs['num_segments'] = actual_segments
 
     total_time = datetime.now() - start_time
@@ -514,6 +541,8 @@ if __name__ == "__main__":
         default="",
         help="Comma-separated binary TSO label columns to store as Y_annotators.",
     )
+    parser.add_argument("--gt_column", type=str, default="",
+                        help="Per-row binary GT TSO column (e.g. inTSO) -> stored as Y_gt for evaluation.")
 
     args = parser.parse_args()
 
@@ -528,6 +557,7 @@ if __name__ == "__main__":
         split_seed=args.seed,
         use_sincos=args.use_sincos,
         annotator_columns=[c.strip() for c in args.annotator_columns.split(",") if c.strip()],
+        gt_column=args.gt_column or None,
     )
 
     # Create train/val split if requested

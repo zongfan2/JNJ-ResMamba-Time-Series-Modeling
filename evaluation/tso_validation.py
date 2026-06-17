@@ -39,6 +39,40 @@ def extract_tso_interval(pred_classes: np.ndarray, *, timestep_minutes: float = 
     }
 
 
+def interval_agreement(pred_classes: np.ndarray, gt_classes: np.ndarray,
+                       *, timestep_minutes: float = 1.0) -> dict:
+    """Compare predicted vs GT TSO intervals (longest contiguous block each side).
+
+    onset/offset MAE and duration error are defined only when BOTH sides have a
+    TSO interval (else NaN). IoU is 0 when exactly one side has an interval, NaN
+    when neither does.
+    """
+    pred = extract_tso_interval(np.asarray(pred_classes), timestep_minutes=timestep_minutes)
+    gt = extract_tso_interval(np.asarray(gt_classes), timestep_minutes=timestep_minutes)
+    pred_has = pred["segment_count"] > 0
+    gt_has = gt["segment_count"] > 0
+    out = {
+        "pred_has_tso": bool(pred_has),
+        "gt_has_tso": bool(gt_has),
+        "onset_mae_min": np.nan,
+        "offset_mae_min": np.nan,
+        "duration_err_h": np.nan,
+        "iou": np.nan,
+    }
+    if pred_has and gt_has:
+        out["onset_mae_min"] = abs(pred["onset_minute"] - gt["onset_minute"])
+        out["offset_mae_min"] = abs(pred["offset_minute"] - gt["offset_minute"])
+        out["duration_err_h"] = pred["duration_hours"] - gt["duration_hours"]
+        inter = max(0.0, min(pred["offset_minute"], gt["offset_minute"])
+                    - max(pred["onset_minute"], gt["onset_minute"]))
+        union = ((pred["offset_minute"] - pred["onset_minute"])
+                 + (gt["offset_minute"] - gt["onset_minute"]) - inter)
+        out["iou"] = float(inter / union) if union > 0 else 0.0
+    elif pred_has != gt_has:
+        out["iou"] = 0.0
+    return out
+
+
 def cross_night_consistency(intervals: list[dict]) -> dict:
     by_subject = defaultdict(list)
     for item in intervals:

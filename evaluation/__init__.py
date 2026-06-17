@@ -21,7 +21,7 @@ from .postprocessing import (
     seq_to_seconds,
 )
 
-from .tso_validation import extract_tso_interval, cross_night_consistency
+from .tso_validation import extract_tso_interval, interval_agreement, cross_night_consistency
 
 __all__ = [
     # Metrics
@@ -40,5 +40,6 @@ __all__ = [
     'seq_to_seconds',
     # TSO validation (label-free)
     'extract_tso_interval',
+    'interval_agreement',
     'cross_night_consistency',
 ]

@@ -11,6 +11,12 @@ summary (best epoch + key curves), and the label-free TSO interval / cross-night
 consistency metrics. With multiple files it also prints a comparison table —
 handy for the CE / GCE / GCE+SupCon ablation.
 
+LOFO/LOSO cross-validation writes one results_iter_*.joblib PER held-out fold
+into the SAME run folder. For those runs the headline number is the FOLD
+AGGREGATE — mean +/- std across folds (e.g. 4-fold LOFO). The aggregate block
+also flags any arm that did not complete all expected folds (a crashed fold
+would otherwise be silently averaged over fewer than 4).
+
 Usage:
     # one file
     python3.11 test-tools/inspect_tso_results.py /path/to/results_iter_0.joblib
@@ -200,6 +206,9 @@ def inspect(path, save_plots=False):
     return {
         "run": label,
         "run_dir": run_name(path),   # untagged folder, for grouping folds
+        "fold": tag,                 # held-out fold/subject tag (None for non-CV)
+        "testing": data.get("testing"),
+        "num_folds": data.get("num_folds"),   # expected fold count (None on older runs)
         "f1_tso": tm.get("f1_tso"),
         "f1_macro": cm.get("f1_score_macro"),
         "bal_acc": cm.get("balanced_accuracy"),
@@ -208,26 +217,37 @@ def inspect(path, save_plots=False):
         "dur_h": tm.get("mean_pred_tso_duration_hours"),
         "segs": tm.get("mean_pred_tso_segment_count"),
         "gt_model_iou": tm.get("gt_model_iou"),
+        "gt_model_f1": tm.get("gt_model_f1"),
         "gt_model_onset_mae": tm.get("gt_model_onset_mae_min"),
+        "gt_model_offset_mae": tm.get("gt_model_offset_mae_min"),
     }
 
 
 def print_comparison(rows):
-    cols = [("run", 34), ("f1_tso", 9), ("f1_macro", 9), ("bal_acc", 9),
-            ("acc", 9), ("test_loss", 10), ("dur_h", 8), ("segs", 7),
-            ("gt_model_iou", 9), ("gt_model_onset_mae", 12)]
+    # run_dir + fold as separate columns so per-fold LOFO/LOSO rows stay
+    # distinguishable (the long run-id otherwise truncated the fold tag away).
+    # (key, short header, width) — short headers keep the row width scannable.
+    cols = [("run_dir", "run_dir", 30), ("fold", "fold", 8),
+            ("f1_tso", "f1_tso", 8), ("f1_macro", "f1_mac", 8),
+            ("bal_acc", "bal_acc", 9), ("acc", "acc", 8),
+            ("gt_model_iou", "gtIoU", 8), ("gt_model_f1", "gtF1", 7),
+            ("gt_model_onset_mae", "gtOnsMAE", 10)]
     print("=" * 78)
-    print("COMPARISON")
+    print("COMPARISON (per file; for LOFO/LOSO see FOLD AGGREGATES below)")
     print("=" * 78)
-    print("".join(name.ljust(w) for name, w in cols))
-    print("-" * sum(w for _, w in cols))
+    print("".join(hdr[: w - 1].ljust(w) for _, hdr, w in cols))
+    print("-" * sum(w for _, _, w in cols))
     for r in rows:
         line = ""
-        for name, w in cols:
-            v = r.get(name)
-            s = (str(v)[: w - 1]) if name == "run" else fmt(v)
+        for key, _, w in cols:
+            s = fmt(r.get(key))
+            if len(s) > w - 1:        # keep the front (arm name / fold tag live there)
+                s = s[: w - 1]
             line += s.ljust(w)
         print(line)
+
+
+CV_MODES = ("LOFO", "LOSO")
 
 
 def print_fold_aggregates(rows):
@@ -236,6 +256,12 @@ def print_fold_aggregates(rows):
     For LOFO/LOSO each held-out fold is a separate results_iter_*.joblib in the
     SAME run folder; the headline number is the fold-averaged metric. (Also
     covers random runs repeated over --training_iterations.)
+
+    For LOFO/LOSO arms the block ALSO runs a completeness check: an arm that did
+    not finish every expected fold is flagged "INCOMPLETE", so a crashed fold is
+    not silently averaged over fewer than (e.g.) 4. Expected folds come from each
+    file's recorded ``num_folds`` when present, else from the union of fold tags
+    seen across all CV arms (folds are shared across arms in a LOFO sweep).
     """
     groups = {}
     order = []
@@ -245,18 +271,40 @@ def print_fold_aggregates(rows):
             groups[k] = []
             order.append(k)
         groups[k].append(r)
-    multi = [(k, groups[k]) for k in order if len(groups[k]) > 1]
-    if not multi:
+
+    # full fold set seen across all CV arms (LOFO uses the same folds per arm)
+    all_cv_folds = sorted({r.get("fold") for r in rows
+                           if r.get("testing") in CV_MODES and r.get("fold")})
+
+    def is_cv(rs):
+        return any(r.get("testing") in CV_MODES for r in rs)
+
+    # Show every CV arm (so incomplete ones get flagged even at n==1); show
+    # non-CV folders only when there is more than one repeat to average.
+    shown = [(k, groups[k]) for k in order if is_cv(groups[k]) or len(groups[k]) > 1]
+    if not shown:
         return
+
     metrics = [("f1_tso", "f1_tso"), ("f1_macro", "f1_macro"),
                ("bal_acc", "bal_acc"), ("acc", "accuracy"),
-               ("gt_model_iou", "IoU vs GT"), ("gt_model_onset_mae", "onset MAE min")]
+               ("gt_model_iou", "IoU vs GT"), ("gt_model_f1", "F1 vs GT"),
+               ("gt_model_onset_mae", "onset MAE min"),
+               ("gt_model_offset_mae", "offset MAE min")]
     print("=" * 78)
     print("FOLD AGGREGATES — mean +/- std across folds (per run folder)")
     print("=" * 78)
-    for run_dir, rs in multi:
-        folds = [str(r.get("run", "")).split("[")[-1].rstrip("]") for r in rs]
-        print(f"{run_dir}  (n={len(rs)}: {', '.join(f for f in folds if f)})")
+    for run_dir, rs in shown:
+        present = sorted({r.get("fold") for r in rs if r.get("fold")})
+        print(f"{run_dir}  (n={len(rs)}" + (f": {', '.join(present)}" if present else "") + ")")
+        if is_cv(rs):
+            nfs = [int(r["num_folds"]) for r in rs if r.get("num_folds")]
+            exp_n = nfs[0] if nfs else (len(all_cv_folds) or len(rs))
+            missing = [f for f in all_cv_folds if f not in present]
+            if len(present) < exp_n or missing:
+                msg = f"    !! INCOMPLETE: {len(present)}/{exp_n} folds"
+                if missing:
+                    msg += f" (missing {', '.join(missing)})"
+                print(msg)
         for key, name in metrics:
             vals = [r.get(key) for r in rs]
             vals = [float(v) for v in vals
@@ -291,7 +339,8 @@ def main():
 
     if len(rows) > 1:
         print_comparison(rows)
-        print_fold_aggregates(rows)
+    if rows:
+        print_fold_aggregates(rows)   # self-gates; flags incomplete CV sweeps
     return 0
 
 

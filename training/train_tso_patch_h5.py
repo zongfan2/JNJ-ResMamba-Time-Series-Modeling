@@ -1673,6 +1673,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
         'iteration': iteration,
         'split_tag': split_tag,        # held-out fold/subject for this CV run
         'testing': args.testing,
+        'num_folds': args.num_folds,   # expected fold count, for LOFO completeness checks
         'test_metrics': test_metrics,
         'comprehensive_metrics': comprehensive_metrics,
         'history': history

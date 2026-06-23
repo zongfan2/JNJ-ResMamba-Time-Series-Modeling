@@ -6,6 +6,7 @@ set -euo pipefail
 
 configs=(
   experiments/configs/deep_tso_phase1_baseline.yaml
+  experiments/configs/deep_tso_phase1_ce_supcon.yaml
   experiments/configs/deep_tso_phase1_gce.yaml
   experiments/configs/deep_tso_phase1_gce_supcon.yaml
   experiments/configs/deep_tso_phase1_gce_elr.yaml

@@ -506,7 +506,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     w_dur=0.0, dur_min=3.0, dur_max=11.0,
                     boundary_tau_steps=0.0,
                     circadian_bias=None,
-                    base_loss="ce", gce_q=0.7,
+                    base_loss="ce", gce_q=0.7, gce_balance=True,
                     w_supcon=0.0, supcon_temperature=0.07,
                     use_consensus_weight=False,
                     patch_duration_hours=None):
@@ -559,6 +559,9 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     gt_pm, model_pm, vanhees_pm = [], [], []   # aligned per-minute GT / model / van Hees (0/1)
     nonfinite_batches = 0   # batches whose loss was NaN/Inf (model not learning if high)
     nan_grad_batches = 0    # batches with finite loss but NaN/Inf gradient (step skipped)
+    supcon_steps = 0        # SupCon-eligible train steps (w_supcon>0, embedding present)
+    supcon_fired = 0        # of those, steps with >=1 same-subject positive pair
+    supcon_pos_pairs = 0    # total same-subject ordered pairs seen across fired steps
 
     if w_supcon > 0 and train_mode:
         batch_iter = subject_grouped_batch_generator(dataset, batch_size)
@@ -668,7 +671,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                 patch_duration_hours=patch_duration_hours,
                 boundary_weight=boundary_weight,
                 supervision_weight=supervision_weight,
-                base_loss=base_loss, gce_q=gce_q,
+                base_loss=base_loss, gce_q=gce_q, gce_balance=gce_balance,
                 w_trans=w_trans, w_dur=w_dur, w_elr=w_elr,
                 trans_budget=trans_budget, dur_min=dur_min, dur_max=dur_max,
                 elr_target=elr_target,
@@ -698,7 +701,11 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             # SupCon needs at least one subject with >= 2 nights in the batch;
             # otherwise it has no positive pairs and is undefined/unstable.
             _, subject_counts = torch.unique(subject_indices, return_counts=True)
+            supcon_steps += 1
             if (subject_counts >= 2).any():
+                supcon_fired += 1
+                # same-subject ordered pairs available as SupCon positives this step
+                supcon_pos_pairs += int((subject_counts * (subject_counts - 1)).sum().item())
                 supcon_loss = SupConLossV2(temperature=supcon_temperature)(embedding, subject_indices)
                 total_loss = total_loss + w_supcon * supcon_loss
 
@@ -869,6 +876,14 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
               f"(finite loss) and their step was skipped. If most batches, the model "
               f"isn't learning — suspect sub-minute segments or the cross-attention path "
               f"(try skip_cross_attention=False in the config).")
+    if train_mode and w_supcon > 0 and supcon_steps > 0:
+        # How active SupCon actually was: fraction of steps that found a positive
+        # pair and the mean #same-subject pairs per firing. Near-zero => SupCon is
+        # contributing almost no gradient (too few multi-night subjects per batch).
+        frac = supcon_fired / supcon_steps
+        mean_pairs = (supcon_pos_pairs / supcon_fired) if supcon_fired else 0.0
+        print(f"  [supcon] fired on {supcon_fired}/{supcon_steps} steps ({frac:.0%}); "
+              f"mean {mean_pairs:.1f} same-subject pairs/firing.")
 
     f1_tso = f1_score(all_labels_tso, (all_preds_tso > 0.5).astype(int), zero_division=0)
 
@@ -1043,6 +1058,11 @@ parser.add_argument("--base_loss", type=str, default="ce", choices=["ce", "gce"]
                     help="Base supervised loss for TSO.")
 parser.add_argument("--gce_q", type=float, default=0.7,
                     help="GCE q parameter when --base_loss=gce.")
+parser.add_argument("--gce_balance", dest="gce_balance", action="store_true", default=True,
+                    help="Class-balance the GCE base loss with the same pos_weight as the CE "
+                         "baseline (binary head), so CE-vs-GCE is apples-to-apples. Default on.")
+parser.add_argument("--no_gce_balance", dest="gce_balance", action="store_false",
+                    help="Disable GCE class balancing (run GCE unweighted, the old behavior).")
 parser.add_argument("--w_supcon", type=float, default=0.0,
                     help="Weight for cross-night supervised contrastive loss.")
 parser.add_argument("--supcon_temperature", type=float, default=0.07,
@@ -1096,6 +1116,7 @@ def _apply_config_defaults(parser, argv):
         "lr": "finetune_lr",
         "base_loss": "base_loss",
         "gce_q": "gce_q",
+        "gce_balance": "gce_balance",
         "w_supcon": "w_supcon",
         "supcon_temperature": "supcon_temperature",
         "use_consensus_weight": "use_consensus_weight",
@@ -1454,6 +1475,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                 circadian_bias=circadian_bias,
                 base_loss=args.base_loss,
                 gce_q=args.gce_q,
+                gce_balance=args.gce_balance,
                 w_supcon=args.w_supcon,
                 supcon_temperature=args.supcon_temperature,
                 use_consensus_weight=args.use_consensus_weight,
@@ -1509,6 +1531,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                         circadian_bias=circadian_bias,
                         base_loss=args.base_loss,
                         gce_q=args.gce_q,
+                        gce_balance=args.gce_balance,
                         w_supcon=0.0,
                         supcon_temperature=args.supcon_temperature,
                         use_consensus_weight=args.use_consensus_weight,
@@ -1620,6 +1643,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
             circadian_bias=circadian_bias,
             base_loss=args.base_loss,
             gce_q=args.gce_q,
+            gce_balance=args.gce_balance,
             w_supcon=0.0,
             supcon_temperature=args.supcon_temperature,
             use_consensus_weight=args.use_consensus_weight,

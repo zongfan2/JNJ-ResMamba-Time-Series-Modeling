@@ -564,10 +564,11 @@ class SupConLossV2(nn.Module):
     """Supervised Contrastive Learning loss"""
     # No multi-view requirement. Contrast between different samples in the batch
     # Fixed implementation based on https://github.com/HobbitLong/SupContrast/blob/master/losses.py
-    def __init__(self, temperature=0.07):
+    def __init__(self, temperature=0.07, base_temperature=0.07):
         super().__init__()
         self.temperature = temperature
-        
+        self.base_temperature = base_temperature
+
     def forward(self, features, labels):
         """
         Args:
@@ -617,9 +618,11 @@ class SupConLossV2(nn.Module):
             return torch.tensor(0.0, device=features.device, requires_grad=True)
         
         mean_log_prob_pos = (mask * log_prob).sum(1)[valid_samples] / mask_sum[valid_samples]
-        
-        # Loss: negative mean of log-likelihood
-        loss = -mean_log_prob_pos.mean()
+
+        # Loss: negative mean of log-likelihood, with the canonical SupCon
+        # temperature/base_temperature scaling so the effective loss weight is
+        # invariant to --supcon_temperature (no-op at the default 0.07).
+        loss = -(self.temperature / self.base_temperature) * mean_log_prob_pos.mean()
         return loss
 
 

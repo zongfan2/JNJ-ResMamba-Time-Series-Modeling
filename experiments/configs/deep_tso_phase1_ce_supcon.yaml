@@ -1,0 +1,30 @@
+experiment:
+  name: deep_tso_phase1_ce_supcon
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+training:
+  output: deep_tso_phase1_ce_supcon
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
+  testing: LOFO        # subject-independent CV; replaces the leaky random-by-night split
+  num_folds: 4         # used only if the H5 lacks FOLD labels (folds then derived from subject ids)
+  batch_size: 8   # raw-patch model is activation-heavy; 24 OOMs a 22GB GPU
+  epochs: 60
+  lr: 0.001
+loss:
+  base_loss: ce
+  # DECISIVE ARM: the strong class-balanced CE baseline + SupCon ONLY (no GCE).
+  # baseline -> ce_supcon isolates SupCon's contribution on a fair, class-balanced
+  # base, with no GCE / pos_weight confound. This is the missing control that lets
+  # SupCon's effect (cross-subject stability) be measured cleanly.
+  components:
+    w_trans: 0.0
+    w_dur: 0.0
+    w_elr: 0.0
+    w_supcon: 0.1
+  supcon_temperature: 0.07
+evaluation:
+  enforce_single_tso: true

@@ -10,17 +10,29 @@ def generalized_cross_entropy_loss(
     *,
     q: float = 0.7,
     weight: torch.Tensor | None = None,
+    balance_classes: bool = False,
     ignore_index: int = -100,
 ) -> torch.Tensor:
-    """GCE for TSO sequence logits with padding and optional confidence weights."""
+    """GCE for TSO sequence logits with padding and optional confidence weights.
+
+    ``balance_classes`` (binary head only) adds a per-minute class-balancing
+    weight identical to ``measure_loss_tso``'s pos_weight = (n_neg/n_pos).clamp(
+    max=50): TSO-positive minutes are up-weighted, negatives weighted 1. This
+    makes a GCE arm class-balanced EXACTLY like the CE baseline it is compared
+    against — without it, GCE silently runs unbalanced while the CE baseline does
+    not, confounding the CE-vs-GCE ablation. The balanced result is normalized by
+    the valid-minute COUNT (not the weight sum), mirroring the BCE-with-pos_weight
+    scaling in measure_loss_tso. Ignored for the 3-class head (whose CE baseline is
+    likewise unweighted), so parity is preserved in both modes.
+    """
     if not 0.0 < q <= 1.0:
         raise ValueError(f"q must be in (0, 1]; got {q}")
 
     valid = labels != ignore_index
     num_classes = outputs.shape[-1]
+    targets = (labels == 2).float()  # TSO-positive indicator (binary prob + balancing)
 
     if num_classes == 1:
-        targets = (labels == 2).float()
         prob_pos = torch.sigmoid(outputs[..., 0]).clamp(min=1e-7, max=1.0)
         prob_true = torch.where(targets > 0.5, prob_pos, 1.0 - prob_pos)
     else:
@@ -38,9 +50,27 @@ def generalized_cross_entropy_loss(
     loss = (1.0 - prob_true.pow(q)) / q
     loss = loss.masked_fill(~valid, 0.0)
 
+    # Per-minute class-balancing weight (binary head), mirroring measure_loss_tso.
+    class_w = None
+    if balance_classes and num_classes == 1:
+        valid_f = valid.float()
+        n_pos = (targets * valid_f).sum().clamp(min=1.0)
+        n_neg = ((1.0 - targets) * valid_f).sum().clamp(min=1.0)
+        pos_weight = (n_neg / n_pos).clamp(max=50.0)
+        class_w = torch.where(targets > 0.5, pos_weight, torch.ones_like(targets))
+
     if weight is not None:
-        w = weight.to(outputs.device).float().masked_fill(~valid, 0.0)
+        w = weight.to(outputs.device).float()
+        if class_w is not None:
+            w = w * class_w
+        w = w.masked_fill(~valid, 0.0)
         return (loss * w).sum() / w.sum().clamp(min=1.0)
+
+    if class_w is not None:
+        # Normalize by valid-minute COUNT (not weight sum) to match the
+        # BCE-with-pos_weight scaling in measure_loss_tso.
+        cw = class_w.masked_fill(~valid, 0.0)
+        return (loss * cw).sum() / valid.float().sum().clamp(min=1.0)
 
     return loss.sum() / valid.float().sum().clamp(min=1.0)
 

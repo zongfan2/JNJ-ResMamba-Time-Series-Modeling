@@ -471,6 +471,7 @@ def measure_loss_tso_structural(
     supervision_weight: Optional[torch.Tensor] = None,
     base_loss: str = "ce",
     gce_q: float = 0.7,
+    gce_balance: bool = True,
     w_trans: float = 0.0,
     w_dur: float = 0.0,
     w_elr: float = 0.0,
@@ -514,7 +515,8 @@ def measure_loss_tso_structural(
 
     if base_loss == "gce":
         from .noisy_labels import generalized_cross_entropy_loss
-        ce = generalized_cross_entropy_loss(outputs, labels, q=gce_q, weight=weight)
+        ce = generalized_cross_entropy_loss(outputs, labels, q=gce_q, weight=weight,
+                                            balance_classes=gce_balance)
     elif base_loss == "ce":
         if weight is not None:
             ce = boundary_reweighted_ce_loss(outputs, labels, weight)

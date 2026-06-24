@@ -169,7 +169,7 @@ def plot_tso_learning_curves(history, output_filepath):
             - val_f1_other, val_f1_nonwear, val_f1_tso
         output_filepath: Path to save the plot
     """
-    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+    fig, axes = plt.subplots(3, 3, figsize=(18, 15))
 
     epochs = range(1, len(history['train_loss']) + 1)
 
@@ -234,6 +234,28 @@ def plot_tso_learning_curves(history, output_filepath):
     axes[1, 2].set_title('F1 vs Accuracy', fontsize=12, fontweight='bold')
     axes[1, 2].legend(fontsize=9)
     axes[1, 2].grid(True, alpha=0.3)
+
+    # Validation ranking quality: AUC and best-threshold F1 (threshold-FREE, used
+    # for model selection) vs F1@0.5 for the TSO class (threshold-SENSITIVE). On the
+    # imbalanced binary head AUC/best-F1 stay smooth while F1@0.5 sawtooths — which
+    # is why selection/early-stopping uses AUC, not F1@0.5.
+    if history.get('val_auc'):
+        axes[2, 0].plot(epochs, history['val_auc'], label='Val AUC', linewidth=2, color='#1f77b4')
+        if history.get('val_best_f1'):
+            axes[2, 0].plot(epochs, history['val_best_f1'], label='Val best-thr F1',
+                           linewidth=2, color='#2ca02c')
+        axes[2, 0].plot(epochs, history['val_f1_tso'], label='Val F1@0.5 (TSO)', linewidth=2,
+                       linestyle='--', color='#ff7f0e', alpha=0.8)
+        axes[2, 0].set_xlabel('Epoch', fontsize=11)
+        axes[2, 0].set_ylabel('Score', fontsize=11)
+        axes[2, 0].set_title('Val ranking: AUC / best-F1 (stable) vs F1@0.5',
+                            fontsize=12, fontweight='bold')
+        axes[2, 0].legend(fontsize=9)
+        axes[2, 0].grid(True, alpha=0.3)
+    else:
+        axes[2, 0].axis('off')
+    axes[2, 1].axis('off')
+    axes[2, 2].axis('off')
 
     plt.tight_layout()
     plt.savefig(output_filepath, dpi=150, bbox_inches='tight')

@@ -1115,6 +1115,11 @@ parser.add_argument("--norm1", type=str, default="BN", choices=["BN", "GN", "IN"
                          "GN/IN normalize per-sample (no running stats), avoiding the "
                          "BatchNorm train/eval mismatch under subject-independent CV that "
                          "destabilizes validation. (The Mamba encoder always uses GN.)")
+parser.add_argument("--select_metric", type=str, default="auc", choices=["auc", "best_f1", "loss"],
+                    help="Validation metric for model selection / early stopping. "
+                         "'auc' (default) and 'best_f1' are threshold-free and avoid the "
+                         "F1@0.5 sawtooth from the imbalanced binary head; 'loss' is the "
+                         "legacy label-free-leaning gate.")
 parser.add_argument("--skip_connect", type=lambda v: str(v).lower() in ("1", "true", "yes"),
                     default=True, help="Enable U-Net-style skip connections.")
 parser.add_argument("--skip_cross_attention",
@@ -1169,6 +1174,7 @@ def _apply_config_defaults(parser, argv):
         "projection_dim": "projection_dim",
         "output_channels": "output_channels",
         "norm1": "norm1",
+        "select_metric": "select_metric",
         "skip_connect": "skip_connect",
         "skip_cross_attention": "skip_cross_attention",
         "w_trans": "w_trans",
@@ -1462,6 +1468,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
         'train_f1_avg': [], 'val_f1_avg': [],
         'train_f1_tso': [], 'val_f1_tso': [],
         'val_selection_score': [],
+        'val_auc': [], 'val_best_f1': [],
     }
     if best_params['output_channels'] == 3:
         history.update({'train_f1_other': [], 'train_f1_nonwear': [],
@@ -1599,13 +1606,26 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                         patch_duration_hours=patch_duration_hours,
                     )
 
-                # NOTE: selection_score is a label-free-leaning robustness gate,
-                # not a TSO-accuracy metric — val loss is still vs. noisy labels.
-                selection_score = (
-                    val_metrics["loss"]
-                    + 0.05 * val_metrics.get("mean_pred_tso_segment_count", 0.0)
-                    + 0.05 * abs(val_metrics.get("mean_pred_tso_duration_hours", 7.0) - 7.0)
-                )
+                # Model-selection / early-stopping metric (--select_metric):
+                #   auc      : maximize per-minute TSO ranking (threshold-free) — DEFAULT.
+                #   best_f1  : maximize the best-threshold F1 (threshold-free).
+                #   loss     : legacy label-free-leaning gate on (noisy) val loss.
+                # EarlyStopping MINIMIZES its input, so auc/best_f1 are negated; a
+                # non-finite metric (e.g. single-class val) maps to +inf (worst) so a
+                # degenerate epoch is never selected. F1@0.5-based selection is avoided
+                # because it is threshold-sensitive and sawtooths on the imbalanced head.
+                _val_auc = val_metrics.get("auc", float("nan"))
+                _val_best_f1 = val_metrics.get("best_f1", float("nan"))
+                if args.select_metric == "auc":
+                    selection_score = -_val_auc if np.isfinite(_val_auc) else float("inf")
+                elif args.select_metric == "best_f1":
+                    selection_score = -_val_best_f1 if np.isfinite(_val_best_f1) else float("inf")
+                else:  # "loss"
+                    selection_score = (
+                        val_metrics["loss"]
+                        + 0.05 * val_metrics.get("mean_pred_tso_segment_count", 0.0)
+                        + 0.05 * abs(val_metrics.get("mean_pred_tso_duration_hours", 7.0) - 7.0)
+                    )
                 val_metrics["selection_score"] = selection_score
 
                 history['val_loss'].append(val_metrics['loss'])
@@ -1613,6 +1633,8 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                 history['val_f1_avg'].append(val_metrics['f1_avg'])
                 history['val_f1_tso'].append(val_metrics['f1_tso'])
                 history["val_selection_score"].append(selection_score)
+                history["val_auc"].append(_val_auc)
+                history["val_best_f1"].append(_val_best_f1)
                 if best_params['output_channels'] == 3:
                     history['val_f1_other'].append(val_metrics['f1_other'])
                     history['val_f1_nonwear'].append(val_metrics['f1_nonwear'])

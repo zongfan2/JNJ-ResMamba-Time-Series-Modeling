@@ -858,6 +858,7 @@ class MBA4TSO_Patch(nn.Module):
             patch_size=patch_size,
             in_channels=patch_channels,
             num_filters=num_filters,
+            norm=norm1,
         )
 
         self.feature_extractor = None

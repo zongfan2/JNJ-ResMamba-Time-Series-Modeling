@@ -31,20 +31,33 @@ class PatchEmbedding(nn.Module):
     Uses 1D convolution + pooling for efficiency.
     Memory efficient: processes patches independently.
     """
-    def __init__(self, patch_size=1200, in_channels=5, num_filters=64, reduction_factor=4):
+    def __init__(self, patch_size=1200, in_channels=5, num_filters=64, reduction_factor=4,
+                 norm="BN"):
         super(PatchEmbedding, self).__init__()
+
+        # Normalization choice. BatchNorm keeps running statistics that are
+        # estimated on the TRAIN subjects; under subject-independent CV (LOFO)
+        # those stats can mismatch the held-out subjects' activations and
+        # destabilize validation. GroupNorm/InstanceNorm normalize per-sample at
+        # both train and eval (no running stats), avoiding that mismatch.
+        def _norm(c):
+            if norm == "GN":
+                return nn.GroupNorm(num_groups=(4 if c % 4 == 0 else 1), num_channels=c)
+            if norm == "IN":
+                return nn.InstanceNorm1d(c, track_running_stats=False)
+            return nn.BatchNorm1d(c)
 
         # Simple 1D conv to extract features from each patch
         # Stride reduces patch dimension by reduction_factor
         self.conv1 = nn.Conv1d(in_channels, num_filters // 2,
                                kernel_size=7, stride=reduction_factor, padding=3)
-        self.bn1 = nn.BatchNorm1d(num_filters // 2)
+        self.bn1 = _norm(num_filters // 2)
         self.act1 = nn.ReLU(inplace=True)
 
         # Second conv to further process
         self.conv2 = nn.Conv1d(num_filters // 2, num_filters,
                                kernel_size=5, stride=2, padding=2)
-        self.bn2 = nn.BatchNorm1d(num_filters)
+        self.bn2 = _norm(num_filters)
         self.act2 = nn.ReLU(inplace=True)
 
         # Global average pooling to get single vector per patch

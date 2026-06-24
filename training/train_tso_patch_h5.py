@@ -1110,6 +1110,11 @@ parser.add_argument("--output_channels", type=int, default=1, choices=[1, 3],
                     help="1=binary (TSO vs not, sigmoid@0.5); 3=three-class "
                          "(other/non-wear/TSO, argmax). 3-class sidesteps the binary "
                          "0.5-threshold collapse for the structural-prior arms.")
+parser.add_argument("--norm1", type=str, default="BN", choices=["BN", "GN", "IN"],
+                    help="Normalization in PatchEmbedding + the ResNet FeatureExtractor. "
+                         "GN/IN normalize per-sample (no running stats), avoiding the "
+                         "BatchNorm train/eval mismatch under subject-independent CV that "
+                         "destabilizes validation. (The Mamba encoder always uses GN.)")
 parser.add_argument("--skip_connect", type=lambda v: str(v).lower() in ("1", "true", "yes"),
                     default=True, help="Enable U-Net-style skip connections.")
 parser.add_argument("--skip_cross_attention",
@@ -1163,6 +1168,7 @@ def _apply_config_defaults(parser, argv):
         "use_consensus_weight": "use_consensus_weight",
         "projection_dim": "projection_dim",
         "output_channels": "output_channels",
+        "norm1": "norm1",
         "skip_connect": "skip_connect",
         "skip_cross_attention": "skip_cross_attention",
         "w_trans": "w_trans",
@@ -1250,7 +1256,7 @@ best_params = {
     'padding_value': 0.0,
     'patch_size': 1200,
     'patch_channels': 6,
-    'norm1': 'BN',
+    'norm1': args.norm1,   # BN default; GN/IN avoid BatchNorm train/eval mismatch under LOFO
     'norm2': 'GN',
     'output_channels': args.output_channels,  # 1=binary; 3=three-class (other/non-wear/TSO)
     'skip_connect': args.skip_connect,

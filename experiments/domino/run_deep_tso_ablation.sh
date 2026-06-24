@@ -14,6 +14,7 @@ configs=(
   experiments/configs/deep_tso_phase1_gce_elr.yaml           # GCE + ELR (expected to collapse)
   experiments/configs/deep_tso_phase1_structural.yaml        # CE + transition/duration priors (gated) — structure-aware
   experiments/configs/deep_tso_phase1_structural_3class.yaml # same, 3-class (avoids 0.5-threshold collapse)
+  experiments/configs/deep_tso_phase1_interval.yaml          # CE + structured single-interval head (C4, E4)
 )
 
 for config in "${configs[@]}"; do

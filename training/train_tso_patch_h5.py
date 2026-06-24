@@ -59,6 +59,7 @@ from losses import (
     measure_loss_tso_with_continuity,
     # Structural priors and noisy-label regularizers (Deep TSO).
     measure_loss_tso_structural,
+    interval_boundary_loss,
     SupConLossV2,
     ELRMemory,
     CircadianPriorBias,
@@ -508,6 +509,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     circadian_bias=None,
                     base_loss="ce", gce_q=0.7, gce_balance=True,
                     w_supcon=0.0, supcon_temperature=0.07,
+                    w_interval=0.0,
                     use_consensus_weight=False,
                     patch_duration_hours=None):
     """
@@ -595,12 +597,22 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         # if batches == 0:
         #     print(f"First batch loading time: {load_time:.4f}s")
 
-        # Forward pass
-        if w_supcon > 0 and train_mode:
-            outputs, embedding = model(pad_X, x_lens, return_embedding=True)
+        # Forward pass. The model appends optional outputs in a fixed order:
+        # (output[, embedding][, (onset_logits, offset_logits)]). Both extras are
+        # train-only (SupCon and the structured-interval head, resp.).
+        want_emb = w_supcon > 0 and train_mode
+        want_int = w_interval > 0 and train_mode
+        ret = model(pad_X, x_lens, return_embedding=want_emb, return_interval=want_int)
+        interval_logits = None
+        embedding = None
+        if want_emb and want_int:
+            outputs, embedding, interval_logits = ret
+        elif want_emb:
+            outputs, embedding = ret
+        elif want_int:
+            outputs, interval_logits = ret
         else:
-            outputs = model(pad_X, x_lens)
-            embedding = None
+            outputs = ret
 
         # Visualize if requested
         if visualize_batch and output_folder is not None and batches == 0:
@@ -708,6 +720,14 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                 supcon_pos_pairs += int((subject_counts * (subject_counts - 1)).sum().item())
                 supcon_loss = SupConLossV2(temperature=supcon_temperature)(embedding, subject_indices)
                 total_loss = total_loss + w_supcon * supcon_loss
+
+        # Structured single-interval boundary loss (C4): pointer-style CE on the
+        # onset/offset position logits vs the longest GT TSO run. Train-only.
+        if want_int and interval_logits is not None:
+            onset_logits, offset_logits = interval_logits
+            total_loss = total_loss + w_interval * interval_boundary_loss(
+                onset_logits, offset_logits, pad_Y, x_lens
+            )
 
         # Backward pass if training
         if train_mode:
@@ -1074,6 +1094,13 @@ parser.add_argument("--w_supcon", type=float, default=0.0,
                     help="Weight for cross-night supervised contrastive loss.")
 parser.add_argument("--supcon_temperature", type=float, default=0.07,
                     help="Temperature for SupConLossV2.")
+parser.add_argument("--interval_head", dest="interval_head", action="store_true", default=False,
+                    help="Enable the structured single-interval output head (C4): per-minute "
+                         "onset/offset position logits decoded to one contiguous TSO interval, "
+                         "instead of per-minute argmax + post-hoc smoothing.")
+parser.add_argument("--w_interval", type=float, default=0.0,
+                    help="Weight for the interval boundary loss (pointer-style onset/offset CE). "
+                         "Train-only; requires --interval_head.")
 parser.add_argument("--use_consensus_weight", action="store_true",
                     help="Use Y_annotators agreement as per-minute supervision confidence.")
 parser.add_argument("--projection_dim", type=int, default=128,
@@ -1130,6 +1157,8 @@ def _apply_config_defaults(parser, argv):
         "gce_balance": "gce_balance",
         "w_supcon": "w_supcon",
         "supcon_temperature": "supcon_temperature",
+        "interval_head": "interval_head",
+        "w_interval": "w_interval",
         "use_consensus_weight": "use_consensus_weight",
         "projection_dim": "projection_dim",
         "output_channels": "output_channels",
@@ -1225,6 +1254,7 @@ best_params = {
     'output_channels': args.output_channels,  # 1=binary; 3=three-class (other/non-wear/TSO)
     'skip_connect': args.skip_connect,
     'skip_cross_attention': args.skip_cross_attention,  # default False = tested path
+    'interval_head': args.interval_head,  # structured single-interval output (C4)
     'use_scaler': False,
     'pretrained_model_path': args.pretrained_model,
     'freeze_layers': args.freeze_layers,
@@ -1500,6 +1530,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                 gce_balance=args.gce_balance,
                 w_supcon=args.w_supcon,
                 supcon_temperature=args.supcon_temperature,
+                w_interval=args.w_interval,
                 use_consensus_weight=args.use_consensus_weight,
                 patch_duration_hours=patch_duration_hours,
             )
@@ -1556,6 +1587,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                         gce_balance=args.gce_balance,
                         w_supcon=0.0,
                         supcon_temperature=args.supcon_temperature,
+                        w_interval=0.0,
                         use_consensus_weight=args.use_consensus_weight,
                         patch_duration_hours=patch_duration_hours,
                     )
@@ -1668,6 +1700,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
             gce_balance=args.gce_balance,
             w_supcon=0.0,
             supcon_temperature=args.supcon_temperature,
+            w_interval=0.0,
             use_consensus_weight=args.use_consensus_weight,
             patch_duration_hours=patch_duration_hours,
         )

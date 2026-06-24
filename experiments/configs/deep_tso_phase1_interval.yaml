@@ -1,0 +1,30 @@
+experiment:
+  name: deep_tso_phase1_interval
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+  # Structured single-interval output head (C4): per-minute onset/offset position
+  # logits -> one contiguous TSO interval by construction. Trained jointly with the
+  # per-minute CE head; at inference the decoded interval replaces post-hoc smoothing.
+  interval_head: true
+training:
+  output: deep_tso_phase1_interval
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
+  testing: LOFO
+  num_folds: 4
+  batch_size: 8
+  epochs: 60
+  lr: 0.001
+loss:
+  base_loss: ce
+  components:
+    w_trans: 0.0
+    w_dur: 0.0
+    w_elr: 0.0
+    w_supcon: 0.0
+    w_interval: 0.5   # pointer-style onset/offset boundary loss weight
+evaluation:
+  enforce_single_tso: true

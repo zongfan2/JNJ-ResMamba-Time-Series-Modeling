@@ -45,6 +45,81 @@ import torch.nn.functional as F
 
 
 # ---------------------------------------------------------------------------
+# Structured output (C4): single-interval onset/offset boundary supervision
+# ---------------------------------------------------------------------------
+
+def tso_interval_bounds(labels, x_lengths=None, positive_class=2, ignore_index=-100):
+    """Per-night (onset, offset) minute indices of the LONGEST contiguous run of
+    ``positive_class`` (the single-TSO prior), within each night's valid length.
+
+    Args:
+        labels: [B, T] integer class indices (``-100`` = padding).
+        x_lengths: [B] valid lengths in minutes (defaults to T).
+        positive_class: the TSO class index (2 in 3-class; binary labels also use 2).
+    Returns:
+        onset [B] long, offset [B] long (both -1 for nights with no TSO),
+        has   [B] bool (True where a TSO run exists).
+    """
+    B, T = labels.shape
+    device = labels.device
+    onset = torch.full((B,), -1, dtype=torch.long, device=device)
+    offset = torch.full((B,), -1, dtype=torch.long, device=device)
+    has = torch.zeros((B,), dtype=torch.bool, device=device)
+    for b in range(B):
+        n = int(x_lengths[b]) if x_lengths is not None else T
+        n = max(1, min(n, T))
+        idx = (labels[b, :n] == positive_class).nonzero(as_tuple=False).flatten().tolist()
+        if not idx:
+            continue
+        # longest contiguous run among the positive indices
+        best = (idx[0], idx[0]); s = p = idx[0]
+        for j in idx[1:]:
+            if j == p + 1:
+                p = j
+            else:
+                if p - s > best[1] - best[0]:
+                    best = (s, p)
+                s = p = j
+        if p - s > best[1] - best[0]:
+            best = (s, p)
+        onset[b], offset[b], has[b] = best[0], best[1], True
+    return onset, offset, has
+
+
+def interval_boundary_loss(onset_logits, offset_logits, labels, x_lengths=None,
+                           positive_class=2):
+    """Pointer-style boundary loss for the structured single-interval head (C4).
+
+    Cross-entropy of the per-minute onset/offset position logits against the
+    start/end of the longest GT TSO run. Nights with no TSO are skipped. Padding
+    minutes must already be masked to a very negative logit by the model so they
+    are never selected. Returns a scalar (0 if no night in the batch has TSO).
+    """
+    onset_gt, offset_gt, has = tso_interval_bounds(labels, x_lengths, positive_class)
+    if not bool(has.any()):
+        return onset_logits.new_zeros(())
+    l_on = F.cross_entropy(onset_logits[has], onset_gt[has])
+    l_off = F.cross_entropy(offset_logits[has], offset_gt[has])
+    return 0.5 * (l_on + l_off)
+
+
+def decode_interval(onset_logits, offset_logits):
+    """Decode a single contiguous interval per night from boundary logits.
+
+    onset = argmax(onset_logits); offset = argmax of offset_logits restricted to
+    positions >= onset (guarantees a valid, contiguous [onset, offset]). Returns
+    (onset [B], offset [B]) long tensors. Use at inference to replace post-hoc
+    single-TSO enforcement with a structurally-guaranteed interval.
+    """
+    onset = onset_logits.argmax(dim=1)
+    B, T = offset_logits.shape
+    ar = torch.arange(T, device=offset_logits.device).unsqueeze(0).expand(B, T)
+    masked_off = offset_logits.masked_fill(ar < onset.unsqueeze(1), -1e4)
+    offset = masked_off.argmax(dim=1)
+    return onset, offset
+
+
+# ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 

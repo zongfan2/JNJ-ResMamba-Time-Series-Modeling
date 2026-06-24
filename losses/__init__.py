@@ -36,6 +36,9 @@ from .structural_priors import (
     CircadianPriorBias,
     hour_from_time_channels,
     measure_loss_tso_structural,
+    interval_boundary_loss,
+    decode_interval,
+    tso_interval_bounds,
 )
 from .noisy_labels import generalized_cross_entropy_loss, consensus_from_annotators
 
@@ -70,6 +73,9 @@ __all__ = [
     'CircadianPriorBias',
     'hour_from_time_channels',
     'measure_loss_tso_structural',
+    'interval_boundary_loss',
+    'decode_interval',
+    'tso_interval_bounds',
     'generalized_cross_entropy_loss',
     'consensus_from_annotators',
     # Modules

@@ -839,6 +839,7 @@ class MBA4TSO_Patch(nn.Module):
         norm2="IN",
         output_channels=3,
         projection_dim=128,
+        interval_head=False,
     ):
         super().__init__()
         self.num_feature_layers = num_feature_layers
@@ -846,6 +847,11 @@ class MBA4TSO_Patch(nn.Module):
         self.output_channels = output_channels
         self.skip_connect = skip_connect
         self.skip_cross_attention = skip_cross_attention
+        # Structured-output (C4): optional pointer-style onset/offset boundary
+        # heads. Two 1x1 convs over the encoder hidden state produce per-minute
+        # onset and offset position logits; argmax(onset)..argmax(offset) is a
+        # single contiguous interval BY CONSTRUCTION (no post-hoc smoothing).
+        self.interval_head = interval_head
 
         self.patch_embedding = PatchEmbedding(
             patch_size=patch_size,
@@ -910,14 +916,18 @@ class MBA4TSO_Patch(nn.Module):
             nn.ReLU(inplace=True),
             nn.Linear(num_filters, projection_dim),
         )
+        if interval_head:
+            self.onset_head = nn.Conv1d(num_filters, 1, kernel_size=1)
+            self.offset_head = nn.Conv1d(num_filters, 1, kernel_size=1)
 
-    def forward(self, x, x_lengths, return_embedding=False):
+    def forward(self, x, x_lengths, return_embedding=False, return_interval=False):
         batch_size, seq_len, _, _ = x.size()
         if isinstance(x_lengths, torch.Tensor):
             lengths = x_lengths.clone().detach().to(x.device)
         else:
             lengths = torch.tensor(x_lengths, device=x.device)
         mask = create_mask(lengths, seq_len, batch_size, x.device).bool()
+        minute_mask = mask  # [B, seq_len] before any feature-extractor length change
 
         x = self.patch_embedding(x).permute(0, 2, 1)
 
@@ -961,12 +971,29 @@ class MBA4TSO_Patch(nn.Module):
             output = F.interpolate(output, size=seq_len, mode="linear", align_corners=False)
         output = output.permute(0, 2, 1)
 
-        # Only compute the pooled night embedding when a caller (cross-night
-        # SupCon, Task 4) actually needs it — otherwise it is wasted compute.
+        # Optional extra outputs, appended in a fixed order so existing callers
+        # (return_embedding only) are unaffected:
+        #   return_embedding -> (output, embedding)
+        #   return_interval  -> (output, (onset_logits, offset_logits))
+        #   both             -> (output, embedding, (onset_logits, offset_logits))
+        extras = []
         if return_embedding:
             pooled = masked_avg_pool(x.permute(0, 2, 1), mask.float())
-            embedding = self.projection_head(pooled)
-            return output, embedding
+            extras.append(self.projection_head(pooled))
+        if return_interval and self.interval_head:
+            onset_logits = self.onset_head(x).squeeze(1)    # [B, T_hidden]
+            offset_logits = self.offset_head(x).squeeze(1)
+            if onset_logits.size(1) != seq_len:
+                onset_logits = F.interpolate(onset_logits.unsqueeze(1), size=seq_len,
+                                             mode="linear", align_corners=False).squeeze(1)
+                offset_logits = F.interpolate(offset_logits.unsqueeze(1), size=seq_len,
+                                              mode="linear", align_corners=False).squeeze(1)
+            # padding minutes can never be a boundary
+            onset_logits = onset_logits.masked_fill(~minute_mask, -1e4)
+            offset_logits = offset_logits.masked_fill(~minute_mask, -1e4)
+            extras.append((onset_logits, offset_logits))
+        if extras:
+            return (output, *extras)
         return output
 
 class MBA4TSO(nn.Module):

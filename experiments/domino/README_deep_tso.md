@@ -9,7 +9,7 @@ All outputs land under `/mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ/`
 |---|---|---|
 | **E2/E3 ablation** (`run_deep_tso_ablation.sh`) | baseline (CE) · ce_supcon · gce · gce_supcon · gce_elr · structural · structural_3class | C2 (structured-noise lens), C3 (SupCon isolation) |
 | E1 architecture | `--skip_connect`/`--skip_cross_attention`/`--output_channels` toggles | C1 (backbone) — *configs TBD* |
-| E4 structured output | onset–offset / CRF head | C4 — *to build (D4)* |
+| E4 structured output | `deep_tso_phase1_interval.yaml` (onset/offset head) | C4 — head + loss built; verify on Domino |
 
 All arms are **4-fold LOFO** (subject-independent), class-balanced (CE *and* GCE get
 `pos_weight`, so loss families are comparable), outputs nested under `DeepTSO-JNJ`.
@@ -28,6 +28,14 @@ Check the per-epoch log shows: a non-zero `F1 TSO`, the `AUC ... best-F1 ...@thr
 and (for SupCon arms) a `[supcon] fired on N/M steps` line. For `structural*` arms confirm
 F1 is **non-zero after the prior warmup** (epoch > `prior_warmup_epochs`, default 5) — if it
 collapses to 0, the gating/3-class needs revisiting.
+
+> **Smoke-test the interval arm first.** `deep_tso_phase1_interval.yaml` (the structured
+> single-interval head, C4) had its head + loss unit-tested locally, but the full model
+> forward + trainer integration could not be run locally (no `mamba_ssm`). Run one fold
+> (`--config .../deep_tso_phase1_interval.yaml --single_fold FOLD1`) and confirm the loss is
+> finite and decreasing before launching the sweep. The head currently adds a training-time
+> boundary loss; using its decoded interval to *replace* post-hoc smoothing at eval is the
+> remaining wire-up (see EXPERIMENT_PLAN D4).
 
 ## 2. Full noisy-label sweep (E2 + E3)
 

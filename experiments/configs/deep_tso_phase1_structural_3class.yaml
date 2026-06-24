@@ -1,0 +1,33 @@
+experiment:
+  name: deep_tso_phase1_structural_3class
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+  # 3-class (other/non-wear/TSO) softmax+argmax sidesteps the binary 0.5-threshold
+  # collapse, so the structural priors cannot push probabilities below 0.5 and
+  # zero out the positive class. non-wear is a real stored label (class 1).
+  output_channels: 3
+training:
+  output: deep_tso_phase1_structural_3class
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
+  testing: LOFO
+  num_folds: 4
+  batch_size: 8
+  epochs: 60
+  lr: 0.001
+  prior_warmup_epochs: 5
+loss:
+  base_loss: ce
+  components:
+    w_trans: 0.2
+    trans_budget: 2.0
+    w_dur: 0.1
+    dur_min: 3.0
+    dur_max: 11.0
+    w_elr: 0.0
+    w_supcon: 0.0
+evaluation:
+  enforce_single_tso: true

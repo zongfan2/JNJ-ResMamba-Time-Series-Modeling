@@ -4,12 +4,16 @@ set -euo pipefail
 # input_h5 / split_file / output_root come from each config YAML by default.
 # Export any of INPUT_H5 / SPLIT_FILE / OUTPUT_ROOT only to OVERRIDE the configs.
 
+# Noisy-label ablation (E2) + SupCon isolation (E3). ~7 arms x 4 LOFO folds is a
+# large sweep (~100 min/run) — comment out arms to run a subset.
 configs=(
-  experiments/configs/deep_tso_phase1_baseline.yaml
-  experiments/configs/deep_tso_phase1_ce_supcon.yaml
-  experiments/configs/deep_tso_phase1_gce.yaml
-  experiments/configs/deep_tso_phase1_gce_supcon.yaml
-  experiments/configs/deep_tso_phase1_gce_elr.yaml
+  experiments/configs/deep_tso_phase1_baseline.yaml          # CE (class-balanced) — the strong baseline
+  experiments/configs/deep_tso_phase1_ce_supcon.yaml         # CE + SupCon — decisive SupCon isolation (E3)
+  experiments/configs/deep_tso_phase1_gce.yaml               # GCE (i.i.d.-robust) — now class-balanced
+  experiments/configs/deep_tso_phase1_gce_supcon.yaml        # GCE + SupCon
+  experiments/configs/deep_tso_phase1_gce_elr.yaml           # GCE + ELR (expected to collapse)
+  experiments/configs/deep_tso_phase1_structural.yaml        # CE + transition/duration priors (gated) — structure-aware
+  experiments/configs/deep_tso_phase1_structural_3class.yaml # same, 3-class (avoids 0.5-threshold collapse)
 )
 
 for config in "${configs[@]}"; do

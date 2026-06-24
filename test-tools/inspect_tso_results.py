@@ -315,11 +315,86 @@ def print_fold_aggregates(rows):
         print()
 
 
+# (metric_key, display, higher_is_better) for the paired significance table
+SIG_METRICS = [("gt_model_iou", "IoU vs GT", True), ("gt_model_f1", "F1 vs GT", True),
+               ("gt_model_onset_mae", "onset MAE", False), ("f1_tso", "f1_tso", True)]
+
+
+def _paired_p(deltas):
+    """Two-sided paired-difference p-value. Uses scipy paired t-test if available,
+    else a manual t-stat with a normal-approx p (flagged ~). Returns (p, approx)."""
+    a = np.asarray(deltas, dtype=float)
+    n = len(a)
+    if n < 2 or a.std(ddof=1) == 0:
+        return (float("nan"), False)
+    t = a.mean() / (a.std(ddof=1) / np.sqrt(n))
+    try:
+        from scipy import stats
+        return (float(2 * stats.t.sf(abs(t), df=n - 1)), False)
+    except Exception:
+        # normal approximation (rough at small n) — labelled approximate
+        from math import erf
+        return (float(2 * (1 - 0.5 * (1 + erf(abs(t) / np.sqrt(2))))), True)
+
+
+def print_pairwise_significance(rows, baseline_sub):
+    """Per-fold paired comparison of each CV arm vs the baseline arm.
+
+    Folds are matched by tag (so the comparison is paired within subject-fold). For
+    each metric prints the mean delta (arm - baseline), how many folds favor the arm,
+    and a paired-difference p-value. With only ~4 LOFO folds a p-value is weak — the
+    per-fold win count and mean delta are the honest headline; p is a guide, flagged
+    ~ when scipy is unavailable (normal approx).
+    """
+    by_arm = {}
+    for r in rows:
+        if r.get("testing") not in CV_MODES:
+            continue
+        by_arm.setdefault(r.get("run_dir"), {})[r.get("fold")] = r
+    if len(by_arm) < 2:
+        return
+    base_key = next((k for k in by_arm if baseline_sub in str(k)), None)
+    if base_key is None:
+        print("=" * 78)
+        print(f"PAIRWISE SIGNIFICANCE — no baseline arm matched '{baseline_sub}'; skipped.")
+        print("=" * 78 + "\n")
+        return
+    base = by_arm[base_key]
+    print("=" * 78)
+    print(f"PAIRWISE SIGNIFICANCE vs baseline '{base_key}' (paired by fold; n folds small)")
+    print("=" * 78)
+    for arm, folds in by_arm.items():
+        if arm == base_key:
+            continue
+        shared = sorted(set(folds) & set(base))
+        print(f"{arm}  (paired on {len(shared)} folds: {', '.join(shared)})")
+        for key, name, higher in SIG_METRICS:
+            deltas = []
+            for f in shared:
+                av, bv = folds[f].get(key), base[f].get(key)
+                if isinstance(av, (int, float)) and isinstance(bv, (int, float)) \
+                        and not (np.isnan(av) or np.isnan(bv)):
+                    deltas.append(av - bv)
+            if len(deltas) < 2:
+                continue
+            d = np.array(deltas)
+            wins = int(np.sum(d > 0 if higher else d < 0))
+            p, approx = _paired_p(d)
+            better = "arm better" if (d.mean() > 0) == higher else "arm worse"
+            ptxt = (f"p{'~' if approx else ''}={p:.3f}" if np.isfinite(p) else "p=n/a")
+            print(f"    {name:12s} d={d.mean():+.4f}  {wins}/{len(d)} folds favor arm  "
+                  f"{ptxt}  ({better})")
+        print()
+
+
 def main():
     ap = argparse.ArgumentParser(description="Inspect Deep TSO results_iter_*.joblib")
     ap.add_argument("paths", nargs="*", help="joblib files, globs, or run/results dirs")
     ap.add_argument("--plots", action="store_true",
                     help="Write a train/val loss curve PNG into each run's learning_plots/ folder.")
+    ap.add_argument("--baseline", default="baseline",
+                    help="Substring identifying the baseline run folder for the paired "
+                         "significance table (default 'baseline').")
     args = ap.parse_args()
     paths = args.paths or [DEFAULT_ROOT]
 
@@ -341,6 +416,7 @@ def main():
         print_comparison(rows)
     if rows:
         print_fold_aggregates(rows)   # self-gates; flags incomplete CV sweeps
+        print_pairwise_significance(rows, args.baseline)
     return 0
 
 

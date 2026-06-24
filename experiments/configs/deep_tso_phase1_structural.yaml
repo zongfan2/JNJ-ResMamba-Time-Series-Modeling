@@ -1,0 +1,37 @@
+experiment:
+  name: deep_tso_phase1_structural
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+training:
+  output: deep_tso_phase1_structural
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
+  testing: LOFO
+  num_folds: 4
+  batch_size: 8
+  epochs: 60
+  lr: 0.001
+  # Structural priors are GATED until this epoch (train gradient only), so CE can
+  # first establish an above-threshold TSO segment before the priors act —
+  # otherwise they compress the binary head to a constant output (all-negative
+  # collapse). The val/test selection metric always uses the full objective.
+  prior_warmup_epochs: 5
+loss:
+  base_loss: ce
+  # Structure-aware noisy-label arm: CE (class-balanced) + transition-count
+  # (smoothness/TV budget) + duration prior (hinge on a plausible TSO length).
+  # This targets the STRUCTURED noise (onset/offset) directly, unlike GCE.
+  # NOTE: only keys under `components` are flattened into argparse defaults.
+  components:
+    w_trans: 0.2
+    trans_budget: 2.0
+    w_dur: 0.1
+    dur_min: 3.0
+    dur_max: 11.0
+    w_elr: 0.0
+    w_supcon: 0.0
+evaluation:
+  enforce_single_tso: true

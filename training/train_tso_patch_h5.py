@@ -1036,6 +1036,13 @@ parser.add_argument('--dur_min', type=float, default=3.0,
                     help='Lower bound (hours) of plausible TSO duration band.')
 parser.add_argument('--dur_max', type=float, default=11.0,
                     help='Upper bound (hours) of plausible TSO duration band.')
+parser.add_argument('--prior_warmup_epochs', type=int, default=5,
+                    help='Disable the transition/duration structural priors until after this '
+                         'epoch (hard cutoff). Applied from epoch 1 they push the binary head '
+                         'to a constant output before CE establishes an above-threshold TSO '
+                         'segment (the all-negative collapse); let CE learn a real segment '
+                         'first, then turn the priors on. Gates the TRAIN gradient only; the '
+                         'val/test selection metric always uses the full objective.')
 parser.add_argument('--w_elr', type=float, default=0.0,
                     help='Weight for Early-Learning Regularization (Liu et al., NeurIPS 2020).')
 parser.add_argument('--elr_beta', type=float, default=0.7,
@@ -1071,6 +1078,10 @@ parser.add_argument("--use_consensus_weight", action="store_true",
                     help="Use Y_annotators agreement as per-minute supervision confidence.")
 parser.add_argument("--projection_dim", type=int, default=128,
                     help="Projection dimension for the TSO night embedding head.")
+parser.add_argument("--output_channels", type=int, default=1, choices=[1, 3],
+                    help="1=binary (TSO vs not, sigmoid@0.5); 3=three-class "
+                         "(other/non-wear/TSO, argmax). 3-class sidesteps the binary "
+                         "0.5-threshold collapse for the structural-prior arms.")
 parser.add_argument("--skip_connect", type=lambda v: str(v).lower() in ("1", "true", "yes"),
                     default=True, help="Enable U-Net-style skip connections.")
 parser.add_argument("--skip_cross_attention",
@@ -1121,13 +1132,18 @@ def _apply_config_defaults(parser, argv):
         "supcon_temperature": "supcon_temperature",
         "use_consensus_weight": "use_consensus_weight",
         "projection_dim": "projection_dim",
+        "output_channels": "output_channels",
         "skip_connect": "skip_connect",
         "skip_cross_attention": "skip_cross_attention",
         "w_trans": "w_trans",
+        "trans_budget": "trans_budget",
         "w_dur": "w_dur",
+        "dur_min": "dur_min",
+        "dur_max": "dur_max",
         "w_elr": "w_elr",
         "elr_beta": "elr_beta",
         "elr_warmup_epochs": "elr_warmup_epochs",
+        "prior_warmup_epochs": "prior_warmup_epochs",
         "boundary_tau_steps": "boundary_tau_steps",
         "enforce_single_tso": "enforce_single_tso",
         "testing": "testing",
@@ -1206,7 +1222,7 @@ best_params = {
     'patch_channels': 6,
     'norm1': 'BN',
     'norm2': 'GN',
-    'output_channels': 1,  # 1=binary (TSO vs not), 3=three-class (other/non-wear/TSO)
+    'output_channels': args.output_channels,  # 1=binary; 3=three-class (other/non-wear/TSO)
     'skip_connect': args.skip_connect,
     'skip_cross_attention': args.skip_cross_attention,  # default False = tested path
     'use_scaler': False,
@@ -1457,6 +1473,12 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
             # The memory itself still accumulates predictions during warmup so
             # the EMA target is meaningful the moment the loss term kicks in.
             elr_active = args.w_elr if epoch >= args.elr_warmup_epochs else 0.0
+            # Same warmup logic for the transition/duration priors: gate the TRAIN
+            # gradient until CE has learned a real above-threshold TSO segment, so
+            # the priors can't collapse the binary head to a constant output early.
+            prior_on = epoch >= args.prior_warmup_epochs
+            w_trans_active = args.w_trans if prior_on else 0.0
+            w_dur_active = args.w_dur if prior_on else 0.0
             model, train_metrics, _ = run_model_tso_h5(
                 model, dataset_train, best_params['batch_size'], True, device, optimizer, scheduler,
                 max_seq_len=max_seq_len,
@@ -1469,8 +1491,8 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                 min_duration_minutes=args.min_duration_minutes,
                 # ----- Structural priors / ELR / circadian bias -----
                 elr_memory=elr_memory, w_elr=elr_active,
-                w_trans=args.w_trans, trans_budget=args.trans_budget,
-                w_dur=args.w_dur, dur_min=args.dur_min, dur_max=args.dur_max,
+                w_trans=w_trans_active, trans_budget=args.trans_budget,
+                w_dur=w_dur_active, dur_min=args.dur_min, dur_max=args.dur_max,
                 boundary_tau_steps=args.boundary_tau_steps,
                 circadian_bias=circadian_bias,
                 base_loss=args.base_loss,

@@ -6,9 +6,10 @@ data:
 model:
   architecture: mba4tso_patch
   projection_dim: 128
-  # Structured single-interval output head (C4): per-minute onset/offset position
-  # logits -> one contiguous TSO interval by construction. Trained jointly with the
-  # per-minute CE head; at inference the decoded interval replaces post-hoc smoothing.
+  # Structured single-interval output head (C4): onset/offset REGRESSION via
+  # soft-argmax of per-minute boundary logits (smooth-L1 vs the GT window),
+  # decoded to one contiguous interval. Trained jointly with the per-minute CE
+  # head; at inference the decoded interval replaces post-hoc smoothing.
   interval_head: true
 training:
   output: deep_tso_phase1_interval

@@ -36,7 +36,7 @@ from .structural_priors import (
     CircadianPriorBias,
     hour_from_time_channels,
     measure_loss_tso_structural,
-    interval_boundary_loss,
+    interval_regression_loss,
     decode_interval,
     tso_interval_bounds,
 )
@@ -73,7 +73,7 @@ __all__ = [
     'CircadianPriorBias',
     'hour_from_time_channels',
     'measure_loss_tso_structural',
-    'interval_boundary_loss',
+    'interval_regression_loss',
     'decode_interval',
     'tso_interval_bounds',
     'generalized_cross_entropy_loss',

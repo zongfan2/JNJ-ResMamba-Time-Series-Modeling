@@ -86,36 +86,60 @@ def tso_interval_bounds(labels, x_lengths=None, positive_class=2, ignore_index=-
     return onset, offset, has
 
 
-def interval_boundary_loss(onset_logits, offset_logits, labels, x_lengths=None,
-                           positive_class=2):
-    """Pointer-style boundary loss for the structured single-interval head (C4).
+def _soft_argmax_positions(onset_logits, offset_logits):
+    """Continuous expected onset/offset minute (soft-argmax) per night.
 
-    Cross-entropy of the per-minute onset/offset position logits against the
-    start/end of the longest GT TSO run. Nights with no TSO are skipped. Padding
-    minutes must already be masked to a very negative logit by the model so they
-    are never selected. Returns a scalar (0 if no night in the batch has TSO).
+    softmax over positions -> expected index E[t] = sum_t t * p(t). Differentiable,
+    and uses the per-minute spatial structure (unlike a pooled scalar regressor).
+    Padding positions are assumed pre-masked to a very negative logit by the model,
+    so their softmax mass is ~0 and does not pull the expectation. Returns
+    (exp_onset [B], exp_offset [B]) float tensors in minute units.
+    """
+    T = onset_logits.shape[1]
+    pos = torch.arange(T, device=onset_logits.device, dtype=onset_logits.dtype)
+    exp_on = (torch.softmax(onset_logits, dim=1) * pos).sum(dim=1)
+    exp_off = (torch.softmax(offset_logits, dim=1) * pos).sum(dim=1)
+    return exp_on, exp_off
+
+
+def interval_regression_loss(onset_logits, offset_logits, labels, x_lengths=None,
+                             positive_class=2, order_weight=0.1):
+    """Onset/offset REGRESSION loss for the structured single-interval head (C4).
+
+    The per-minute onset/offset logits are turned into continuous expected
+    positions by soft-argmax, normalized to a fraction of each night's valid
+    length, and regressed (smooth-L1) toward the start/end of the longest GT TSO
+    run. A small hinge ``relu(onset - offset)`` discourages inverted intervals.
+    Nights with no TSO are skipped. Returns a scalar (0 if no night has TSO).
     """
     onset_gt, offset_gt, has = tso_interval_bounds(labels, x_lengths, positive_class)
     if not bool(has.any()):
         return onset_logits.new_zeros(())
-    l_on = F.cross_entropy(onset_logits[has], onset_gt[has])
-    l_off = F.cross_entropy(offset_logits[has], offset_gt[has])
-    return 0.5 * (l_on + l_off)
+    T = onset_logits.shape[1]
+    if x_lengths is None:
+        lens = onset_logits.new_full((onset_logits.shape[0],), float(T))
+    else:
+        lens = x_lengths.to(onset_logits.dtype).clamp(min=1.0)
+    exp_on, exp_off = _soft_argmax_positions(onset_logits, offset_logits)
+    pred_on, pred_off = exp_on[has] / lens[has], exp_off[has] / lens[has]
+    gt_on = onset_gt[has].to(onset_logits.dtype) / lens[has]
+    gt_off = offset_gt[has].to(onset_logits.dtype) / lens[has]
+    reg = F.smooth_l1_loss(pred_on, gt_on) + F.smooth_l1_loss(pred_off, gt_off)
+    order = torch.relu(pred_on - pred_off).mean()
+    return 0.5 * reg + order_weight * order
 
 
 def decode_interval(onset_logits, offset_logits):
-    """Decode a single contiguous interval per night from boundary logits.
+    """Decode a single contiguous interval per night from the regression head.
 
-    onset = argmax(onset_logits); offset = argmax of offset_logits restricted to
-    positions >= onset (guarantees a valid, contiguous [onset, offset]). Returns
-    (onset [B], offset [B]) long tensors. Use at inference to replace post-hoc
-    single-TSO enforcement with a structurally-guaranteed interval.
+    Returns the soft-argmax expected onset/offset rounded to integer minutes, with
+    offset clamped to be >= onset so the decoded [onset, offset] is contiguous and
+    valid by construction. Use at inference to replace post-hoc single-TSO
+    enforcement. Returns (onset [B], offset [B]) long tensors.
     """
-    onset = onset_logits.argmax(dim=1)
-    B, T = offset_logits.shape
-    ar = torch.arange(T, device=offset_logits.device).unsqueeze(0).expand(B, T)
-    masked_off = offset_logits.masked_fill(ar < onset.unsqueeze(1), -1e4)
-    offset = masked_off.argmax(dim=1)
+    exp_on, exp_off = _soft_argmax_positions(onset_logits, offset_logits)
+    onset = exp_on.round().long()
+    offset = torch.maximum(exp_off.round().long(), onset)
     return onset, offset
 
 

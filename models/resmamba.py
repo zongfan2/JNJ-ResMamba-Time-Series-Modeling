@@ -847,10 +847,11 @@ class MBA4TSO_Patch(nn.Module):
         self.output_channels = output_channels
         self.skip_connect = skip_connect
         self.skip_cross_attention = skip_cross_attention
-        # Structured-output (C4): optional pointer-style onset/offset boundary
-        # heads. Two 1x1 convs over the encoder hidden state produce per-minute
-        # onset and offset position logits; argmax(onset)..argmax(offset) is a
-        # single contiguous interval BY CONSTRUCTION (no post-hoc smoothing).
+        # Structured-output (C4): optional onset/offset REGRESSION heads. Two 1x1
+        # convs over the encoder hidden state produce per-minute onset and offset
+        # position logits; a soft-argmax over positions regresses the continuous
+        # window endpoints (losses.structural_priors.interval_regression_loss),
+        # decoded to one contiguous interval (no post-hoc smoothing).
         self.interval_head = interval_head
 
         self.patch_embedding = PatchEmbedding(

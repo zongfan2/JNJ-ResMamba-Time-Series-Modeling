@@ -59,7 +59,7 @@ from losses import (
     measure_loss_tso_with_continuity,
     # Structural priors and noisy-label regularizers (Deep TSO).
     measure_loss_tso_structural,
-    interval_boundary_loss,
+    interval_regression_loss,
     SupConLossV2,
     ELRMemory,
     CircadianPriorBias,
@@ -721,11 +721,12 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                 supcon_loss = SupConLossV2(temperature=supcon_temperature)(embedding, subject_indices)
                 total_loss = total_loss + w_supcon * supcon_loss
 
-        # Structured single-interval boundary loss (C4): pointer-style CE on the
-        # onset/offset position logits vs the longest GT TSO run. Train-only.
+        # Structured single-interval head (C4): onset/offset REGRESSION via
+        # soft-argmax of the per-minute boundary logits, smooth-L1 vs the longest
+        # GT TSO run. Train-only.
         if want_int and interval_logits is not None:
             onset_logits, offset_logits = interval_logits
-            total_loss = total_loss + w_interval * interval_boundary_loss(
+            total_loss = total_loss + w_interval * interval_regression_loss(
                 onset_logits, offset_logits, pad_Y, x_lens
             )
 

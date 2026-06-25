@@ -106,7 +106,7 @@ def main():
     ap.add_argument("--ukb_folder",
                     default="/mnt/imported/data/NocturnalScratch_Analysis/UKB_v2/raw/")
     ap.add_argument("--noprod_folder",
-                    default="/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_writeall/raw/")
+                    default="/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_train_van_new_enh_lth-rth/raw/")
     ap.add_argument("--gt_column", default="inTSO", help="GT TSO column expected in noprod (eval).")
     ap.add_argument("--max_files", type=int, default=20)
     args = ap.parse_args()

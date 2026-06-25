@@ -39,6 +39,7 @@ from .structural_priors import (
     interval_regression_loss,
     decode_interval,
     tso_interval_bounds,
+    cross_night_consistency_loss,
 )
 from .noisy_labels import generalized_cross_entropy_loss, consensus_from_annotators
 
@@ -76,6 +77,7 @@ __all__ = [
     'interval_regression_loss',
     'decode_interval',
     'tso_interval_bounds',
+    'cross_night_consistency_loss',
     'generalized_cross_entropy_loss',
     'consensus_from_annotators',
     # Modules

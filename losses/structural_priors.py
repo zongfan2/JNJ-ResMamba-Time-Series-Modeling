@@ -143,6 +143,50 @@ def decode_interval(onset_logits, offset_logits):
     return onset, offset
 
 
+def cross_night_consistency_loss(outputs, x_lengths, subject_indices, ignore_index=-100):
+    """Within-subject cross-night CONSISTENCY penalty (positive-only).
+
+    Motivation: the SupCon term uses subject identity to form positives AND
+    negatives, but the negative ("different subjects are dissimilar") assumption is
+    weak for sleep timing — many people sleep in similar windows, so different-
+    subject pairs are often false negatives. This loss keeps only the part we
+    actually believe: a subject's nights should be consistent. For each subject
+    with >=2 nights in the batch, it penalizes the variance of the predicted
+    window's soft CENTER and soft DURATION across that subject's nights.
+
+    It is computed from the per-minute TSO probabilities (no interval head needed),
+    fully differentiable, and collapse-safe: the per-minute supervised loss keeps
+    the predictions meaningful, so this only aligns same-subject windows rather than
+    flattening everything. There is NO negative/repulsion term, so it is unaffected
+    by batch size and by the false-negative problem. Train-only; returns a scalar
+    (0 if no subject has >=2 nights in the batch).
+
+    Args:
+        outputs: [B, T, C] logits (C=1 sigmoid or C=3 softmax-TSO).
+        x_lengths: [B] valid lengths in minutes.
+        subject_indices: [B] long, the subject id per night.
+    """
+    probs = _tso_probs(outputs)                      # [B, T] soft TSO prob
+    B, T = probs.shape
+    pos = torch.arange(T, device=probs.device, dtype=probs.dtype)
+    valid = (torch.arange(T, device=probs.device)[None, :]
+             < x_lengths.to(probs.device)[:, None].clamp(max=T)).to(probs.dtype)
+    p = probs * valid
+    mass = p.sum(dim=1).clamp(min=1e-6)              # soft duration (minutes) per night
+    center = (p * pos).sum(dim=1) / mass             # soft window center (minute index)
+    lens = x_lengths.to(probs.dtype).clamp(min=1.0)
+    dur_frac = mass / lens                           # fraction of night (scale-free)
+    ctr_frac = center / lens
+    terms = []
+    for s in torch.unique(subject_indices):
+        idx = (subject_indices == s).nonzero(as_tuple=False).flatten()
+        if idx.numel() >= 2:
+            terms.append(ctr_frac[idx].var(unbiased=False) + dur_frac[idx].var(unbiased=False))
+    if not terms:
+        return outputs.new_zeros(())
+    return torch.stack(terms).mean()
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------

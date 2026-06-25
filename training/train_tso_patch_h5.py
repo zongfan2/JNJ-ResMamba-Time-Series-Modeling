@@ -60,6 +60,7 @@ from losses import (
     # Structural priors and noisy-label regularizers (Deep TSO).
     measure_loss_tso_structural,
     interval_regression_loss,
+    cross_night_consistency_loss,
     SupConLossV2,
     ELRMemory,
     CircadianPriorBias,
@@ -510,7 +511,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     circadian_bias=None,
                     base_loss="ce", gce_q=0.7, gce_balance=True,
                     w_supcon=0.0, supcon_temperature=0.07,
-                    w_interval=0.0,
+                    w_interval=0.0, w_consistency=0.0,
                     use_consensus_weight=False,
                     patch_duration_hours=None):
     """
@@ -566,7 +567,8 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     supcon_fired = 0        # of those, steps with >=1 same-subject positive pair
     supcon_pos_pairs = 0    # total same-subject ordered pairs seen across fired steps
 
-    if w_supcon > 0 and train_mode:
+    if (w_supcon > 0 or w_consistency > 0) and train_mode:
+        # both cross-night terms need >=2 nights of the same subject per batch
         batch_iter = subject_grouped_batch_generator(dataset, batch_size)
     else:
         batch_iter = batch_generator_h5(dataset, batch_size=batch_size, shuffle=train_mode)
@@ -729,6 +731,17 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
             onset_logits, offset_logits = interval_logits
             total_loss = total_loss + w_interval * interval_regression_loss(
                 onset_logits, offset_logits, pad_Y, x_lens
+            )
+
+        # Cross-night CONSISTENCY (positive-only): penalize within-subject variance
+        # of the predicted window center/duration. No negatives -> unaffected by the
+        # SupCon false-negative concern and by batch size. Train-only; self-guards
+        # (returns 0 if no subject has >=2 nights in the batch).
+        if w_consistency > 0 and train_mode:
+            subj_c = torch.tensor([s["subject_index"] for s in batch_samples],
+                                  dtype=torch.long, device=device)
+            total_loss = total_loss + w_consistency * cross_night_consistency_loss(
+                outputs, x_lens, subj_c
             )
 
         # Backward pass if training
@@ -1103,6 +1116,10 @@ parser.add_argument("--interval_head", dest="interval_head", action="store_true"
 parser.add_argument("--w_interval", type=float, default=0.0,
                     help="Weight for the interval boundary loss (pointer-style onset/offset CE). "
                          "Train-only; requires --interval_head.")
+parser.add_argument("--w_consistency", type=float, default=0.0,
+                    help="Weight for the cross-night CONSISTENCY loss (positive-only: within-"
+                         "subject variance of predicted window center/duration). Train-only; "
+                         "uses subject-grouped batching like SupCon, but no negative term.")
 parser.add_argument("--use_consensus_weight", action="store_true",
                     help="Use Y_annotators agreement as per-minute supervision confidence.")
 parser.add_argument("--projection_dim", type=int, default=128,
@@ -1180,6 +1197,7 @@ def _apply_config_defaults(parser, argv):
         "supcon_temperature": "supcon_temperature",
         "interval_head": "interval_head",
         "w_interval": "w_interval",
+        "w_consistency": "w_consistency",
         "use_consensus_weight": "use_consensus_weight",
         "projection_dim": "projection_dim",
         "output_channels": "output_channels",
@@ -1556,6 +1574,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                 w_supcon=args.w_supcon,
                 supcon_temperature=args.supcon_temperature,
                 w_interval=args.w_interval,
+                w_consistency=args.w_consistency,
                 use_consensus_weight=args.use_consensus_weight,
                 patch_duration_hours=patch_duration_hours,
             )
@@ -1613,6 +1632,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                         w_supcon=0.0,
                         supcon_temperature=args.supcon_temperature,
                         w_interval=0.0,
+                        w_consistency=0.0,
                         use_consensus_weight=args.use_consensus_weight,
                         patch_duration_hours=patch_duration_hours,
                     )
@@ -1753,6 +1773,7 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
             w_supcon=0.0,
             supcon_temperature=args.supcon_temperature,
             w_interval=0.0,
+            w_consistency=0.0,
             use_consensus_weight=args.use_consensus_weight,
             patch_duration_hours=patch_duration_hours,
         )

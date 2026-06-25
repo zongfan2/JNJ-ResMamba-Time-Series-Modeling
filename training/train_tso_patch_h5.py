@@ -501,6 +501,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                     smooth_preds=False, smooth_method='majority_vote', smooth_window=5,
                     continuity_weight=0.0, enforce_single_tso=False,
                     min_gap_minutes=30, min_duration_minutes=10,
+                    tso_threshold=0.5,
                     # ----- Structural priors and noisy-label regularizers -----
                     elr_memory=None, w_elr=0.0,
                     w_trans=0.0, trans_budget=2.0,
@@ -803,7 +804,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         if enforce_single_tso:
             if num_out_channels == 1:
                 # Binary: threshold sigmoid to get 0/1 class indices
-                pred_classes = (torch.sigmoid(outputs[:, :, 0]) > 0.5).long()
+                pred_classes = (torch.sigmoid(outputs[:, :, 0]) > tso_threshold).long()
             else:
                 pred_classes = torch.argmax(outputs, dim=-1)  # [batch, seq_len]
             pred_classes = batch_enforce_single_tso(
@@ -835,7 +836,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
 
             # Label-free TSO interval extraction (per night, predicted classes only).
             if num_out_channels == 1:
-                pred_seq = (valid_preds[:, 0] > 0.5).astype(int)
+                pred_seq = (valid_preds[:, 0] > tso_threshold).astype(int)
             else:
                 pred_seq = np.argmax(valid_preds, axis=1)
             interval = extract_tso_interval(pred_seq, timestep_minutes=1.0)
@@ -906,12 +907,12 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         print(f"  [supcon] fired on {supcon_fired}/{supcon_steps} steps ({frac:.0%}); "
               f"mean {mean_pairs:.1f} same-subject pairs/firing.")
 
-    f1_tso = f1_score(all_labels_tso, (all_preds_tso > 0.5).astype(int), zero_division=0)
+    f1_tso = f1_score(all_labels_tso, (all_preds_tso > tso_threshold).astype(int), zero_division=0)
 
     if num_out_channels == 1:
         # Binary: only TSO metric
         f1_avg = f1_tso
-        accuracy = np.mean((all_preds_tso > 0.5).astype(int) == all_labels_tso.astype(int))
+        accuracy = np.mean((all_preds_tso > tso_threshold).astype(int) == all_labels_tso.astype(int))
         diag = threshold_diagnostics(all_preds_tso, all_labels_tso)
         metrics = {
             'loss': avg_loss,
@@ -1120,6 +1121,15 @@ parser.add_argument("--select_metric", type=str, default="auc", choices=["auc", 
                          "'auc' (default) and 'best_f1' are threshold-free and avoid the "
                          "F1@0.5 sawtooth from the imbalanced binary head; 'loss' is the "
                          "legacy label-free-leaning gate.")
+parser.add_argument("--calibrate_threshold", dest="calibrate_threshold",
+                    action="store_true", default=True,
+                    help="At test, binarize the binary TSO head at the val-calibrated "
+                         "best_threshold (from the selected epoch) instead of 0.5. The model "
+                         "ranks well but its 0.5 calibration drifts, so a calibrated threshold "
+                         "gives a faithful, stable test F1/IoU. Default on.")
+parser.add_argument("--no_calibrate_threshold", dest="calibrate_threshold",
+                    action="store_false",
+                    help="Use the fixed 0.5 threshold at test (disables val calibration).")
 parser.add_argument("--skip_connect", type=lambda v: str(v).lower() in ("1", "true", "yes"),
                     default=True, help="Enable U-Net-style skip connections.")
 parser.add_argument("--skip_cross_attention",
@@ -1175,6 +1185,7 @@ def _apply_config_defaults(parser, argv):
         "output_channels": "output_channels",
         "norm1": "norm1",
         "select_metric": "select_metric",
+        "calibrate_threshold": "calibrate_threshold",
         "skip_connect": "skip_connect",
         "skip_cross_attention": "skip_cross_attention",
         "w_trans": "w_trans",
@@ -1673,6 +1684,9 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
                     'val_accuracy': val_metrics['accuracy'],
                     'val_f1_avg': val_metrics['f1_avg'],
                     'val_selection_score': selection_score,
+                    # Val-calibrated decision threshold at the selected epoch, applied
+                    # at test instead of 0.5 (the model ranks well; 0.5 is miscalibrated).
+                    'tso_threshold': float(val_metrics.get('best_threshold', 0.5)),
                     'history': history,
                     'best_params': best_params,
                     'num_gpus': num_gpus
@@ -1683,10 +1697,16 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
         # improved the selection score) leaves no checkpoint — fall back to the
         # current in-memory weights instead of crashing on a missing file.
         checkpoint_path = os.path.join(train_models_folder, f"best_model_iter_{iteration}.pt")
+        test_tso_threshold = 0.5
         if os.path.exists(checkpoint_path):
             checkpoint = torch.load(checkpoint_path)
             model_to_load = model.module if isinstance(model, torch.nn.DataParallel) else model
             model_to_load.load_state_dict(checkpoint['model_state_dict'])
+            # Apply the val-calibrated decision threshold at test (binary head only).
+            if args.calibrate_threshold and best_params['output_channels'] == 1:
+                thr = float(checkpoint.get('tso_threshold', 0.5))
+                if np.isfinite(thr) and 0.0 < thr < 1.0:
+                    test_tso_threshold = thr
         elif args.test_only:
             # In --test_only there is no training to fall back on: an untrained
             # (random) model would silently produce garbage metrics. Fail loudly so
@@ -1702,10 +1722,13 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
 
     # Test evaluation
     print(f"\nEvaluating on test set...")
+    print(f"  Test decision threshold: {test_tso_threshold:.3f}"
+          + (" (val-calibrated)" if test_tso_threshold != 0.5 else " (default 0.5)"))
     with torch.no_grad():
         _, test_metrics, test_predictions = run_model_tso_h5(
             model, dataset_test, best_params['batch_size'], False, device, optimizer, scheduler,
             max_seq_len=max_seq_len,
+            tso_threshold=test_tso_threshold,
             patch_size=best_params['patch_size'],
             padding_value=best_params['padding_value'],
             verbose=True,
@@ -1735,9 +1758,9 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
         )
 
 
-    # Calculate comprehensive metrics
+    # Calculate comprehensive metrics (use the same val-calibrated test threshold)
     if best_params['output_channels'] == 1:
-        pred_classes = (test_predictions['preds_tso'] > 0.5).astype(int)
+        pred_classes = (test_predictions['preds_tso'] > test_tso_threshold).astype(int)
         true_classes = test_predictions['labels_tso'].astype(int)
     else:
         pred_classes = np.argmax(
@@ -1782,6 +1805,8 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
         'split_tag': split_tag,        # held-out fold/subject for this CV run
         'testing': args.testing,
         'num_folds': args.num_folds,   # expected fold count, for LOFO completeness checks
+        'select_metric': args.select_metric,
+        'test_tso_threshold': test_tso_threshold,  # 0.5 or the val-calibrated threshold
         'test_metrics': test_metrics,
         'comprehensive_metrics': comprehensive_metrics,
         'history': history

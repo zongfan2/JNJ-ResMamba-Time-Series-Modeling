@@ -171,6 +171,12 @@ def inspect(path, save_plots=False):
         return None
 
     print(f"  iteration: {data.get('iteration')}" + (f"  held-out: {tag}" if tag else ""))
+    thr = data.get("test_tso_threshold")
+    if isinstance(thr, (int, float)):
+        sel = data.get("select_metric", "")
+        print(f"  test threshold: {thr:.3f}"
+              + (" (val-calibrated)" if abs(thr - 0.5) > 1e-9 else " (0.5)")
+              + (f"  | selection: {sel}" if sel else ""))
     tm = data.get("test_metrics", {}) or {}
     cm = data.get("comprehensive_metrics", {}) or {}
     print_metrics("test_metrics", tm)

@@ -226,6 +226,11 @@ def inspect(path, save_plots=False):
         "gt_model_f1": tm.get("gt_model_f1"),
         "gt_model_onset_mae": tm.get("gt_model_onset_mae_min"),
         "gt_model_offset_mae": tm.get("gt_model_offset_mae_min"),
+        # van-Hees reference (same inTSO anchor) — aggregated alongside the model
+        "gt_vanhees_iou": tm.get("gt_vanhees_iou"),
+        "gt_vanhees_f1": tm.get("gt_vanhees_f1"),
+        "gt_vanhees_onset_mae": tm.get("gt_vanhees_onset_mae_min"),
+        "gt_vanhees_offset_mae": tm.get("gt_vanhees_offset_mae_min"),
     }
 
 
@@ -291,11 +296,21 @@ def print_fold_aggregates(rows):
     if not shown:
         return
 
-    metrics = [("f1_tso", "f1_tso"), ("f1_macro", "f1_macro"),
-               ("bal_acc", "bal_acc"), ("acc", "accuracy"),
-               ("gt_model_iou", "IoU vs GT"), ("gt_model_f1", "F1 vs GT"),
-               ("gt_model_onset_mae", "onset MAE min"),
-               ("gt_model_offset_mae", "offset MAE min")]
+    # model-only metrics (no van-Hees counterpart)
+    model_only = [("f1_tso", "f1_tso"), ("f1_macro", "f1_macro"),
+                  ("bal_acc", "bal_acc"), ("acc", "accuracy")]
+    # GT metrics reported model vs van-Hees side by side (key_model, key_vanhees, label, higher_is_better)
+    gt_paired = [("gt_model_iou", "gt_vanhees_iou", "IoU vs GT", True),
+                 ("gt_model_f1", "gt_vanhees_f1", "F1 vs GT", True),
+                 ("gt_model_onset_mae", "gt_vanhees_onset_mae", "onset MAE min", False),
+                 ("gt_model_offset_mae", "gt_vanhees_offset_mae", "offset MAE min", False)]
+
+    def _agg(rs, key):
+        vals = [float(r.get(key)) for r in rs
+                if isinstance(r.get(key), (int, float))
+                and not (isinstance(r.get(key), float) and np.isnan(r.get(key)))]
+        return (float(np.mean(vals)), float(np.std(vals)), len(vals)) if vals else None
+
     print("=" * 78)
     print("FOLD AGGREGATES — mean +/- std across folds (per run folder)")
     print("=" * 78)
@@ -311,13 +326,22 @@ def print_fold_aggregates(rows):
                 if missing:
                     msg += f" (missing {', '.join(missing)})"
                 print(msg)
-        for key, name in metrics:
-            vals = [r.get(key) for r in rs]
-            vals = [float(v) for v in vals
-                    if isinstance(v, (int, float)) and not (isinstance(v, float) and np.isnan(v))]
-            if vals:
-                a = np.array(vals)
-                print(f"    {name:16s} {a.mean():.4f} +/- {a.std():.4f}  (n={len(vals)})")
+        for key, name in model_only:
+            g = _agg(rs, key)
+            if g:
+                print(f"    {name:16s} {g[0]:.4f} +/- {g[1]:.4f}  (n={g[2]})")
+        for mk, vk, name, higher in gt_paired:
+            gm = _agg(rs, mk)
+            if not gm:
+                continue
+            line = f"    {name:16s} model {gm[0]:.4f} +/- {gm[1]:.4f}"
+            gv = _agg(rs, vk)
+            if gv:
+                d = gm[0] - gv[0]
+                winner = "model" if ((d > 0) == higher) else "vanHees"
+                line += (f"  | vanHees {gv[0]:.4f} +/- {gv[1]:.4f}"
+                         f"  (d {d:+.4f}, {winner} better)")
+            print(line + f"  (n={gm[2]})")
         print()
 
 

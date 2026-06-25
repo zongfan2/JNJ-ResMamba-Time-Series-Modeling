@@ -103,8 +103,10 @@ def fmt(x, nd=3):
 
 def main():
     ap = argparse.ArgumentParser(description="UKB vs noprod parquet compatibility check")
-    ap.add_argument("--ukb_folder", required=True)
-    ap.add_argument("--noprod_folder", required=True)
+    ap.add_argument("--ukb_folder",
+                    default="/mnt/imported/data/NocturnalScratch_Analysis/UKB_v2/raw/")
+    ap.add_argument("--noprod_folder",
+                    default="/mnt/data/Nocturnal-scratch/geneactive_20hz_3s_b1s_production_writeall/raw/")
     ap.add_argument("--gt_column", default="inTSO", help="GT TSO column expected in noprod (eval).")
     ap.add_argument("--max_files", type=int, default=20)
     args = ap.parse_args()

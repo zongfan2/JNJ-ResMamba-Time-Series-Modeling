@@ -1020,6 +1020,10 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
 parser = argparse.ArgumentParser(description='TSO Status Prediction with H5 Data')
 parser.add_argument('--input_h5', type=str, default=None, help='Path to input H5 file (or set data.input_h5 in --config)')
 parser.add_argument('--split_file', type=str, default=None, help='Path to train/val split file (.npz); only used when --testing random')
+parser.add_argument('--test_h5', type=str, default=None,
+                    help='Separate H5 for the TEST set (cross-dataset eval). If set, train+val '
+                         'are carved from --input_h5 (e.g. UKB, predictTSO only) and test = ALL '
+                         'of --test_h5 (e.g. noprod, has inTSO). Overrides --testing folds.')
 parser.add_argument('--testing', type=str, default='random',
                     choices=['random', 'LOFO', 'LOSO', 'production'],
                     help='CV strategy. random=split_file/random val (legacy, NOT subject-independent); '
@@ -1184,6 +1188,7 @@ def _apply_config_defaults(parser, argv):
     mapping = {
         "input_h5": "input_h5",
         "split_file": "split_file",
+        "test_h5": "test_h5",
         "output": "output",
         "output_root": "output_root",
         "architecture": "model",
@@ -1320,17 +1325,33 @@ if args.pretrained_model is not None:
 print(f"\nLoading H5 data from: {args.input_h5}")
 
 # ---- Build cross-validation runs (subject-independent for LOFO/LOSO) ----
-cv_runs = build_cv_runs(
-    args.input_h5, args.testing, args.num_folds, args.val_size,
-    args.single_fold, seed=42, split_file=args.split_file,
-)
-# random/production preserve the --training_iterations repeat; LOFO/LOSO use the
-# folds themselves as the iterations (one held-out group per run).
-if args.testing in ('LOFO', 'LOSO'):
-    runs = cv_runs
+if args.test_h5:
+    # Cross-dataset: train/val carved from --input_h5 (e.g. UKB, predictTSO only),
+    # test = ALL segments of --test_h5 (e.g. noprod, which carries inTSO=Y_gt for
+    # the honest eval). Model selection (val) uses AUC vs predictTSO on the UKB
+    # carve; the noprod test stays fully held out. One run (not k-fold).
+    with h5py.File(args.input_h5, 'r') as _f:
+        n_tr = int(_f.attrs['num_segments'])
+    with h5py.File(args.test_h5, 'r') as _f:
+        n_te = int(_f.attrs['num_segments'])
+    _rng = np.random.RandomState(42)
+    _shuf = np.arange(n_tr); _rng.shuffle(_shuf)
+    _nval = max(1, int(n_tr * args.val_size))
+    runs = [('cross', np.sort(_shuf[_nval:]), np.sort(_shuf[:_nval]), np.arange(n_te))]
+    print(f"\nCross-dataset eval: train/val from {os.path.basename(args.input_h5)} "
+          f"(n={n_tr}, val={_nval}); test = ALL of {os.path.basename(args.test_h5)} (n={n_te})")
 else:
-    runs = cv_runs * args.training_iterations
-print(f"\nTesting strategy: {args.testing} -> {len(runs)} run(s): {[r[0] for r in runs]}")
+    cv_runs = build_cv_runs(
+        args.input_h5, args.testing, args.num_folds, args.val_size,
+        args.single_fold, seed=42, split_file=args.split_file,
+    )
+    # random/production preserve the --training_iterations repeat; LOFO/LOSO use the
+    # folds themselves as the iterations (one held-out group per run).
+    if args.testing in ('LOFO', 'LOSO'):
+        runs = cv_runs
+    else:
+        runs = cv_runs * args.training_iterations
+    print(f"\nTesting strategy: {args.testing} -> {len(runs)} run(s): {[r[0] for r in runs]}")
 
 max_seq_len = 1440  # 24 hours in minutes
 
@@ -1345,7 +1366,9 @@ for iteration, (split_tag, train_indices, val_indices, test_indices) in enumerat
     # (used only for model selection / early stopping).
     dataset_train = H5Dataset(args.input_h5, indices=train_indices)
     dataset_val = H5Dataset(args.input_h5, indices=val_indices)
-    dataset_test = H5Dataset(args.input_h5, indices=test_indices)
+    # cross-dataset: test comes from --test_h5 (noprod); otherwise from --input_h5
+    dataset_test = H5Dataset(args.test_h5 if args.test_h5 else args.input_h5,
+                             indices=test_indices)
     print(f"  Segments — train: {len(train_indices)}, val: {len(val_indices)}, test: {len(test_indices)}")
     print(f"  Channels: {dataset_train.num_channels} "
           f"({'x,y,z,temp,time_sin,time_cos' if dataset_train.num_channels == 6 else 'x,y,z,temp,time_sin'})")

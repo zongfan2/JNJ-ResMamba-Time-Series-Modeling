@@ -328,9 +328,14 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
             compression_opts=4
         )
 
+        # These 1-D datasets are trimmed to actual_segments at the end, so they must
+        # be chunked + resizable (maxshape) — otherwise h5py raises "Only chunked
+        # datasets can be resized" when any source segment is skipped (actual < num).
         ds_lens = h5f.create_dataset(
             'seq_lengths',
             shape=(num_segments,),
+            maxshape=(None,),
+            chunks=True,
             dtype=np.int32
         )
 
@@ -338,20 +343,26 @@ def convert_parquet_to_h5(input_folder, output_h5, additional_folder=None,
         ds_segments = h5f.create_dataset(
             'segment_names',
             shape=(num_segments,),
+            maxshape=(None,),
+            chunks=True,
             dtype=dt
         )
 
         ds_subjects = h5f.create_dataset(
             "subject_ids",
             shape=(num_segments,),
+            maxshape=(None,),
+            chunks=True,
             dtype=dt,
         )
 
         # Per-segment cross-validation labels (parallel to subject_ids).
         # fold_ids may be empty strings when the source parquet has no FOLD
         # column; the trainer then derives folds from subject ids.
-        ds_pid = h5f.create_dataset("pid_ids", shape=(num_segments,), dtype=dt)
-        ds_fold = h5f.create_dataset("fold_ids", shape=(num_segments,), dtype=dt)
+        ds_pid = h5f.create_dataset("pid_ids", shape=(num_segments,),
+                                    maxshape=(None,), chunks=True, dtype=dt)
+        ds_fold = h5f.create_dataset("fold_ids", shape=(num_segments,),
+                                     maxshape=(None,), chunks=True, dtype=dt)
 
         ds_Y_gt = None
         if gt_column:

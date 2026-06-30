@@ -891,6 +891,20 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                 all_labels_nonwear.extend(labels_onehot[:, 1].tolist())
                 all_labels_tso.extend(labels_onehot[:, 2].tolist())
 
+    # Guard: a run that processed zero batches leaves per-batch locals (e.g.
+    # num_out_channels) unbound and would crash below with an opaque
+    # UnboundLocalError. Zero batches means the split is empty — and with the
+    # cross-night terms active the loader is subject_grouped_batch_generator,
+    # which yields nothing for an empty dataset. Fail loudly and actionably.
+    if batches == 0:
+        raise RuntimeError(
+            f"Processed 0 batches: the {'train' if train_mode else 'eval'} split is empty "
+            f"(dataset has {len(dataset)} segments, batch_size={batch_size}). Check that "
+            f"--input_h5 points at a populated H5 (num_segments > 0) and that the train/val "
+            f"carve is non-empty — see the 'Segments — train/val/test' line printed above. "
+            f"For the cross-dataset (--test_h5) run, --input_h5 must be the UKB training H5."
+        )
+
     # Convert to numpy arrays
     all_preds_tso = np.array(all_preds_tso)
     all_labels_tso = np.array(all_labels_tso)

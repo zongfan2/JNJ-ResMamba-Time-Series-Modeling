@@ -567,6 +567,10 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
     supcon_fired = 0        # of those, steps with >=1 same-subject positive pair
     supcon_pos_pairs = 0    # total same-subject ordered pairs seen across fired steps
 
+    # DataParallel scatters dim 0 across these many GPUs; batches smaller than this
+    # are routed to model.module instead (see the forward below).
+    dp_devices = len(model.device_ids) if isinstance(model, torch.nn.DataParallel) else 1
+
     if (w_supcon > 0 or w_consistency > 0) and train_mode:
         # both cross-night terms need >=2 nights of the same subject per batch
         batch_iter = subject_grouped_batch_generator(dataset, batch_size)
@@ -605,7 +609,15 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         # train-only (SupCon and the structured-interval head, resp.).
         want_emb = w_supcon > 0 and train_mode
         want_int = w_interval > 0 and train_mode
-        ret = model(pad_X, x_lens, return_embedding=want_emb, return_interval=want_int)
+        # DataParallel scatters dim 0 across GPUs; a batch smaller than the device
+        # count leaves a replica with no input -> "forward() missing arguments". Run
+        # such (usually the final partial) batches on the underlying module on the
+        # primary GPU so no samples are dropped and train/eval both stay correct.
+        if dp_devices > 1 and pad_X.size(0) < dp_devices:
+            fwd = model.module
+        else:
+            fwd = model
+        ret = fwd(pad_X, x_lens, return_embedding=want_emb, return_interval=want_int)
         interval_logits = None
         embedding = None
         if want_emb and want_int:

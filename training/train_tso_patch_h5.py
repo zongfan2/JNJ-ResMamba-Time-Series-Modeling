@@ -1157,6 +1157,24 @@ parser.add_argument("--skip_cross_attention",
                     type=lambda v: str(v).lower() in ("1", "true", "yes"), default=False,
                     help="Use the cross-attention skip path. Default False = the "
                          "self-attention path covered by the factory test.")
+# --- Architecture knobs for the E1 component ablation (config- or CLI-settable) ---
+parser.add_argument("--blocks_mba", type=int, default=5,
+                    help="Number of Mamba state-space encoder blocks (maps to "
+                         "num_encoder_layers). E1 '-Mamba' ablation: set 0 to drop the "
+                         "state-space encoder entirely (patch+feature features go straight "
+                         "to the output head).")
+parser.add_argument("--num_feature_layers", type=int, default=6,
+                    help="Depth of the residual convolutional feature extractor. E1 "
+                         "'-feature-extractor' ablation: set 0 to remove the ResNet stack "
+                         "(also disables the U-Net skips, which need feature maps).")
+parser.add_argument("--featurelayer", type=str, default="ResNet",
+                    choices=["ResNet", "ResTCN", "TCN"],
+                    help="Convolutional feature-extractor block type. Default ResNet.")
+parser.add_argument("--patch_embed", type=str, default="conv", choices=["conv", "stat"],
+                    help="Per-minute patch embedder. 'conv' (default) = strided-conv "
+                         "intra-minute (20 Hz) encoder; E1 '-patch-embedding' ablation: "
+                         "'stat' = non-convolutional mean/std summary + linear projection "
+                         "(keeps coarse level/energy, drops learned intra-minute texture).")
 parser.add_argument("--config", type=str, default="", help="Path to YAML config file.")
 parser.add_argument("--output_root", type=str, default="/mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ",
                     help="Root folder for Domino training outputs (all Deep TSO experiments live under DeepTSO-JNJ).")
@@ -1211,6 +1229,10 @@ def _apply_config_defaults(parser, argv):
         "calibrate_threshold": "calibrate_threshold",
         "skip_connect": "skip_connect",
         "skip_cross_attention": "skip_cross_attention",
+        "blocks_mba": "blocks_mba",
+        "num_feature_layers": "num_feature_layers",
+        "featurelayer": "featurelayer",
+        "patch_embed": "patch_embed",
         "w_trans": "w_trans",
         "trans_budget": "trans_budget",
         "w_dur": "w_dur",
@@ -1251,7 +1273,13 @@ if args.multi_gpu and torch.cuda.is_available():
     num_gpus = len(gpu_ids)
     print(f"Multi-GPU mode: Using {num_gpus} GPUs: {gpu_ids}")
 else:
-    device = torch.device(f"cuda:{args.num_gpu}" if torch.cuda.is_available() else "cpu")
+    # Tolerate a comma-separated --num_gpu in single-GPU mode (e.g. "0,1,2,3" passed
+    # without --multi_gpu): use the first id rather than crashing on "cuda:0,1,2,3".
+    first_gpu = str(args.num_gpu).split(',')[0].strip()
+    if torch.cuda.is_available() and ',' in str(args.num_gpu):
+        print(f"[warn] --num_gpu='{args.num_gpu}' lists multiple GPUs but --multi_gpu "
+              f"was not set; using only cuda:{first_gpu}. Add --multi_gpu to use all of them.")
+    device = torch.device(f"cuda:{first_gpu}" if torch.cuda.is_available() else "cpu")
     gpu_ids = None
     num_gpus = 1
     print(f"Single GPU/CPU mode: {device}")
@@ -1286,9 +1314,10 @@ best_params = {
     'droppath': 0.3,
     'kernel_f': 3,
     'kernel_MBA': 7,
-    'num_feature_layers': 6,
-    'blocks_MBA': 5,
-    'featurelayer': 'ResNet',
+    'num_feature_layers': args.num_feature_layers,  # E1 ablation: 0 removes the ResNet stack
+    'blocks_MBA': args.blocks_mba,                   # E1 ablation: 0 removes the Mamba encoder
+    'featurelayer': args.featurelayer,
+    'patch_embed': args.patch_embed,                 # E1 ablation: 'stat' removes the conv patch embed
     'lr': args.finetune_lr if args.finetune_lr is not None else 0.001,
     'w_other': 1.0,
     'w_nonwear': 1.0,

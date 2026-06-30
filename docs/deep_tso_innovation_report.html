@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deep TSO — Innovation Proposal</title>
+<style>
+  :root{
+    --bg:#f6f7f9;
+    --card:#ffffff;
+    --ink:#1d2733;
+    --muted:#5b6878;
+    --line:#e2e7ee;
+    --accent:#0f766e;       /* teal */
+    --accent2:#3b5bdb;      /* indigo */
+    --warn:#b45309;
+    --good:#15803d;
+    --bad:#b91c1c;
+    --chip:#eef2f7;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;font-size:16px;
+  }
+  .wrap{max-width:980px;margin:0 auto;padding:48px 28px 90px}
+  header.title{border-bottom:3px solid var(--accent);padding-bottom:22px;margin-bottom:8px}
+  .kicker{color:var(--accent);font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:12.5px}
+  h1{font-size:30px;line-height:1.2;margin:8px 0 6px}
+  .sub{color:var(--muted);font-size:15px;margin:0}
+  .meta{color:var(--muted);font-size:13px;margin-top:14px}
+  h2{font-size:21px;margin:42px 0 10px;padding-top:10px;border-top:1px solid var(--line)}
+  h3{font-size:16.5px;margin:22px 0 6px;color:var(--ink)}
+  p{margin:10px 0}
+  .lead{font-size:17px;color:#33414f}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:18px 0;
+        box-shadow:0 1px 2px rgba(20,30,45,.04)}
+  .tldr{background:linear-gradient(180deg,#f0fdfa,#ffffff);border:1px solid #cfeae6}
+  .tldr ol{margin:6px 0 0;padding-left:20px}
+  .tldr li{margin:7px 0}
+  .chip{display:inline-block;background:var(--chip);border:1px solid var(--line);border-radius:999px;
+        padding:2px 11px;font-size:12.5px;color:var(--muted);margin:2px 4px 2px 0}
+  .chip.acc{background:#e7f3f1;border-color:#bfe0da;color:#0b5e57}
+  .chip.idg{background:#eaeefb;border-color:#cbd6f6;color:#2f47b0}
+  .fig{margin:18px 0;text-align:center}
+  .fig svg{max-width:100%;height:auto}
+  .cap{color:var(--muted);font-size:13px;margin-top:8px;text-align:center}
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:#f0f3f7;font-size:12.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted)}
+  td code{background:#f1f4f8;padding:1px 5px;border-radius:5px;font-size:12.5px}
+  .ref{font-size:13.5px;color:#374555;margin:7px 0;padding-left:30px;text-indent:-30px}
+  .ref b{color:var(--ink)}
+  .tag{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:6px;margin-right:8px;vertical-align:middle}
+  .t-now{background:#e7f3f1;color:#0b5e57}
+  .t-next{background:#eaeefb;color:#2f47b0}
+  .t-later{background:#fbeee0;color:#92400e}
+  .callout{border-left:4px solid var(--warn);background:#fffaf1;padding:14px 18px;border-radius:8px;margin:18px 0}
+  .callout.good{border-color:var(--good);background:#f3fbf4}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:720px){.two{grid-template-columns:1fr}}
+  .small{font-size:13.5px;color:var(--muted)}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  ul.tight li{margin:4px 0}
+  .eq{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px 16px;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+      font-size:13.5px;overflow-x:auto;margin:12px 0}
+  .eq .c{color:#94a3b8}
+  .num{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;border-radius:50%;
+       background:var(--accent);color:#fff;font-weight:700;font-size:14px;margin-right:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="title">
+  <div class="kicker">Internal Research Proposal · Deep TSO (IMWUT Paper 2)</div>
+  <h1>Deep TSO: Noise-Robust, Structured Sleep-Window Detection from Raw Accelerometry</h1>
+  <p class="sub">Reframing minute-level TSO prediction as learning-from-noisy-labels with a single-interval structural prior and cross-night personalization.</p>
+  <div class="meta">Prepared for manager discussion · Builds on <code>training/train_tso_patch_h5.py</code> &amp; <code>MBA4TSO_Patch</code> · Draft v1</div>
+</header>
+
+<div class="card tldr">
+  <h3 style="margin-top:4px">Executive summary</h3>
+  <p class="small" style="margin-top:2px">We currently predict minute-level sleep/non-sleep over a full day with a Mamba model trained by plain cross-entropy against labels produced by a <em>traditional</em> TSO algorithm. Those labels are not ground truth — they are noisy, and the noise is <strong>structured</strong> (concentrated at sleep onset/offset). Three changes turn this into a defensible novel contribution:</p>
+  <ol>
+    <li><strong>Learn from noisy labels explicitly.</strong> Replace plain CE with a robust loss (Generalized Cross Entropy) and treat multiple traditional algorithms as independent <em>noisy annotators</em>, weighting the loss by their agreement.</li>
+    <li><strong>Use prior knowledge as supervision.</strong> A subject's nights are similar — add a cross-night contrastive objective so the encoder learns sleep structure, not the labeler's mistakes.</li>
+    <li><strong>Predict structure, not pixels.</strong> Enforce a single contiguous TSO interval (CRF / interval head) instead of independent per-minute decisions.</li>
+  </ol>
+  <p class="small" style="margin-bottom:2px">Most of the machinery (GCE, SupCon, a continuity loss, a per-minute encoder) already exists in the repo. <strong>DivideMix-style clean/noisy splitting is intentionally out of scope for this version.</strong></p>
+</div>
+
+<!-- ============================================================= -->
+<h2>1. Where we are, and why it limits us</h2>
+<p class="lead">The pipeline below takes a whole day of raw 20&nbsp;Hz accelerometer + temperature data, embeds one-minute patches, models time with a Mamba state-space encoder, and emits an independent label per minute.</p>
+
+<div class="fig">
+<svg viewBox="0 0 920 150" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Current pipeline">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 z" fill="#5b6878"/>
+    </marker>
+  </defs>
+  <g font-family="inherit" font-size="12.5" text-anchor="middle">
+    <!-- boxes -->
+    <g>
+      <rect x="6"  y="44" width="120" height="58" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+      <text x="66" y="68" font-weight="700">Raw day</text>
+      <text x="66" y="86" fill="#5b6878">1440×1200×6</text>
+    </g>
+    <g>
+      <rect x="166" y="44" width="120" height="58" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+      <text x="226" y="68" font-weight="700">Patch embed</text>
+      <text x="226" y="86" fill="#5b6878">per-minute</text>
+    </g>
+    <g>
+      <rect x="326" y="44" width="120" height="58" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+      <text x="386" y="68" font-weight="700">ResNet feat.</text>
+      <text x="386" y="86" fill="#5b6878">FeatureExtractor</text>
+    </g>
+    <g>
+      <rect x="486" y="44" width="120" height="58" rx="10" fill="#e7f3f1" stroke="#bfe0da"/>
+      <text x="546" y="68" font-weight="700">Mamba enc.</text>
+      <text x="546" y="86" fill="#0b5e57">temporal SSM</text>
+    </g>
+    <g>
+      <rect x="646" y="44" width="120" height="58" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+      <text x="706" y="64" font-weight="700">Per-minute</text>
+      <text x="706" y="80" font-weight="700">logits</text>
+      <text x="706" y="95" fill="#5b6878">[B,1440,C]</text>
+    </g>
+    <g>
+      <rect x="806" y="44" width="108" height="58" rx="10" fill="#fdecec" stroke="#f3c9c9"/>
+      <text x="860" y="68" font-weight="700" fill="#b91c1c">plain CE</text>
+      <text x="860" y="86" fill="#b91c1c">vs noisy y</text>
+    </g>
+    <!-- arrows -->
+    <g stroke="#5b6878" stroke-width="1.6" marker-end="url(#ar)">
+      <line x1="126" y1="73" x2="162" y2="73"/>
+      <line x1="286" y1="73" x2="322" y2="73"/>
+      <line x1="446" y1="73" x2="482" y2="73"/>
+      <line x1="606" y1="73" x2="642" y2="73"/>
+      <line x1="766" y1="73" x2="802" y2="73"/>
+    </g>
+    <text x="460" y="24" font-weight="700" fill="#1d2733">Current: independent per-minute classification trained on a single noisy label source</text>
+  </g>
+</svg>
+<div class="cap">Figure 1 — Current Deep TSO pipeline. The red box is the weak point: plain cross-entropy treats noisy labels as if they were ground truth.</div>
+</div>
+
+<p>Three structural weaknesses follow from this design:</p>
+<ul class="tight">
+  <li><strong>Labels are treated as truth.</strong> <code>measure_loss_tso</code> uses plain BCE/CE. Deep networks fit clean patterns first and <em>memorize</em> label noise later, so the model actively learns the traditional algorithm's errors.</li>
+  <li><strong>Each minute is decided independently.</strong> TSO is physiologically a <em>single contiguous block</em> per night, but the model can emit fragmented predictions; only a post-hoc smoother enforces continuity.</li>
+  <li><strong>Model selection is on noisy validation loss.</strong> Early stopping monitors <code>val_loss</code> against noisy labels and <code>dataset_test = dataset_val</code> — so "best" currently means "best mimic of the traditional algorithm."</li>
+</ul>
+
+<!-- ============================================================= -->
+<h2>2. The key insight: the noise is structured</h2>
+<p class="lead">Traditional sleep/TSO algorithms (Sadeh, Cole–Kripke, van&nbsp;Hees HDCZA) agree strongly on the <em>interior</em> of sleep and disagree mainly at the <strong>onset/offset boundaries</strong> and during quiet wakefulness. This is the single most important fact for the design — it tells us exactly where the labels can and cannot be trusted.</p>
+
+<div class="fig">
+<svg viewBox="0 0 920 270" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Where the label noise lives">
+  <g font-family="inherit" font-size="12.5">
+    <text x="20" y="22" font-weight="700">A day, scored by three traditional algorithms</text>
+    <!-- timeline base -->
+    <line x1="60" y1="200" x2="880" y2="200" stroke="#cdd6e2" stroke-width="1.5"/>
+    <text x="60" y="222" fill="#5b6878" text-anchor="middle">evening</text>
+    <text x="470" y="222" fill="#5b6878" text-anchor="middle">night</text>
+    <text x="880" y="222" fill="#5b6878" text-anchor="middle">morning</text>
+
+    <!-- three algorithm tracks; sleep blocks with differing edges -->
+    <!-- track 1 -->
+    <text x="52" y="58" text-anchor="end" fill="#5b6878">Sadeh</text>
+    <rect x="60" y="46" width="820" height="18" rx="4" fill="#f1f4f8"/>
+    <rect x="300" y="46" width="470" height="18" rx="4" fill="#3b5bdb" opacity=".75"/>
+    <!-- track 2 -->
+    <text x="52" y="92" text-anchor="end" fill="#5b6878">Cole–Kripke</text>
+    <rect x="60" y="80" width="820" height="18" rx="4" fill="#f1f4f8"/>
+    <rect x="320" y="80" width="430" height="18" rx="4" fill="#3b5bdb" opacity=".75"/>
+    <!-- track 3 -->
+    <text x="52" y="126" text-anchor="end" fill="#5b6878">van Hees</text>
+    <rect x="60" y="114" width="820" height="18" rx="4" fill="#f1f4f8"/>
+    <rect x="285" y="114" width="505" height="18" rx="4" fill="#3b5bdb" opacity=".75"/>
+
+    <!-- agreement bands -->
+    <!-- core agreement -->
+    <rect x="320" y="150" width="430" height="30" rx="5" fill="#15803d" opacity=".18"/>
+    <text x="535" y="169" text-anchor="middle" fill="#15803d" font-weight="700">CORE — all agree (trust)</text>
+    <!-- disagreement edges -->
+    <rect x="285" y="150" width="35" height="30" fill="#b45309" opacity=".22"/>
+    <rect x="750" y="150" width="40" height="30" fill="#b45309" opacity=".22"/>
+    <text x="300" y="244" text-anchor="middle" fill="#b45309" font-weight="700" font-size="11">onset</text>
+    <text x="300" y="256" text-anchor="middle" fill="#b45309" font-size="10">disagree</text>
+    <text x="770" y="244" text-anchor="middle" fill="#b45309" font-weight="700" font-size="11">offset</text>
+    <text x="770" y="256" text-anchor="middle" fill="#b45309" font-size="10">disagree</text>
+
+    <!-- brackets to timeline -->
+    <line x1="285" y1="180" x2="285" y2="200" stroke="#b45309" stroke-width="1.3" stroke-dasharray="3 3"/>
+    <line x1="320" y1="180" x2="320" y2="200" stroke="#15803d" stroke-width="1.3" stroke-dasharray="3 3"/>
+    <line x1="750" y1="180" x2="750" y2="200" stroke="#15803d" stroke-width="1.3" stroke-dasharray="3 3"/>
+    <line x1="790" y1="180" x2="790" y2="200" stroke="#b45309" stroke-width="1.3" stroke-dasharray="3 3"/>
+  </g>
+</svg>
+<div class="cap">Figure 2 — Three labelers agree on the sleep core (green, high-confidence) but disagree at the edges (amber). The plain-CE model wastes capacity fitting amber minutes that are essentially label noise.</div>
+</div>
+
+<div class="callout good">
+<strong>Design consequence.</strong> If we can <em>measure</em> labeler agreement, we get a free, per-minute confidence signal: full supervision where algorithms agree, soft / down-weighted supervision where they disagree. This drives Innovation&nbsp;1.
+</div>
+
+<!-- ============================================================= -->
+<h2>3. Innovation 1 — Learning from noisy labels</h2>
+<p class="lead">Two complementary mechanisms, both low-risk and largely drop-in given existing code.</p>
+
+<div class="card">
+<h3><span class="num">a</span>Robust loss instead of plain CE</h3>
+<p>Swap the BCE/CE inside <code>measure_loss_tso</code> for <strong>Generalized Cross Entropy</strong> (GCE) — already implemented as <code>GCELoss</code> in <code>losses/standard.py</code> but unused for TSO. GCE interpolates between CE (fast but noise-sensitive) and MAE (noise-robust) via a single parameter <code>q</code>:</p>
+<div class="eq">L<sub>q</sub>(p, y) = (1 − p<sub>y</sub><sup>q</sup>) / q&nbsp;&nbsp;&nbsp;<span class="c"># q→0 ≈ cross-entropy · q=1 = MAE (most robust)</span></div>
+<p class="small">Symmetric Cross Entropy (SCE) is an equally valid alternative. This is a one-function change with no architectural impact and directly reduces noise memorization.</p>
+</div>
+
+<div class="card">
+<h3><span class="num">b</span>Multiple traditional algorithms as noisy annotators</h3>
+<p>Rather than one label track, run 2–3 traditional algorithms and treat each as an independent annotator with its own biases. Where they agree, supervise fully; where they disagree, down-weight (agreement-as-confidence) or learn each annotator's reliability with a <strong>crowd layer</strong> / noise-adaptation layer that maps a shared clean posterior to each annotator's noisy labels.</p>
+
+<div class="fig">
+<svg viewBox="0 0 900 230" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Multi-annotator consensus weighting">
+  <defs>
+    <marker id="ar2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L7,3 L0,6 z" fill="#5b6878"/>
+    </marker>
+  </defs>
+  <g font-family="inherit" font-size="12.5" text-anchor="middle">
+    <!-- annotators -->
+    <rect x="20"  y="20"  width="150" height="34" rx="8" fill="#eaeefb" stroke="#cbd6f6"/><text x="95" y="42">Sadeh labels</text>
+    <rect x="20"  y="64"  width="150" height="34" rx="8" fill="#eaeefb" stroke="#cbd6f6"/><text x="95" y="86">Cole–Kripke labels</text>
+    <rect x="20"  y="108" width="150" height="34" rx="8" fill="#eaeefb" stroke="#cbd6f6"/><text x="95" y="130">van Hees labels</text>
+
+    <!-- consensus -->
+    <rect x="250" y="55" width="160" height="52" rx="10" fill="#e7f3f1" stroke="#bfe0da"/>
+    <text x="330" y="78" font-weight="700">Agreement map</text>
+    <text x="330" y="96" fill="#0b5e57">per-minute confidence wᵢ</text>
+
+    <!-- model -->
+    <rect x="490" y="40" width="150" height="82" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+    <text x="565" y="74" font-weight="700">Mamba model</text>
+    <text x="565" y="92" fill="#5b6878">p(sleep | x)</text>
+
+    <!-- weighted loss -->
+    <rect x="715" y="55" width="165" height="52" rx="10" fill="#e7f3f1" stroke="#bfe0da"/>
+    <text x="797" y="78" font-weight="700">Weighted robust loss</text>
+    <text x="797" y="96" fill="#0b5e57">Σ wᵢ · GCE</text>
+
+    <g stroke="#5b6878" stroke-width="1.5" marker-end="url(#ar2)">
+      <line x1="170" y1="37"  x2="248" y2="66"/>
+      <line x1="170" y1="81"  x2="248" y2="81"/>
+      <line x1="170" y1="125" x2="248" y2="96"/>
+      <line x1="410" y1="81"  x2="486" y2="81"/>
+      <line x1="640" y1="81"  x2="713" y2="81"/>
+    </g>
+    <!-- feedback note -->
+    <text x="565" y="150" fill="#5b6878" font-size="11">interior minutes → high wᵢ · boundary minutes → low wᵢ</text>
+    <text x="450" y="200" font-weight="700">Consensus turns "noisy labels" into "noisy labels + a confidence signal"</text>
+  </g>
+</svg>
+<div class="cap">Figure 3 — Agreement across labelers yields a per-minute weight <em>w<sub>i</sub></em>; the model is supervised strongly on the core and weakly at the contested edges.</div>
+</div>
+<p class="small">This framing is genuinely novel for actigraphy TSO — the literature almost never models the traditional algorithms as a crowd of annotators — and it matches the structured-noise picture in Figure&nbsp;2 exactly.</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>4. Innovation 2 — Prior knowledge as supervision (cross-night contrastive)</h2>
+<p class="lead">The manager's intuition — the same person sleeps similarly across nights — is a free supervisory signal that does not depend on the noisy labels at all. We encode it with a contrastive objective on a per-night embedding: nights from the same subject attract, nights from different subjects repel.</p>
+
+<div class="fig">
+<svg viewBox="0 0 900 250" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cross-night contrastive embedding">
+  <g font-family="inherit" font-size="12.5">
+    <text x="20" y="22" font-weight="700">Per-night embeddings (pooled from the Mamba encoder, before the output head)</text>
+
+    <!-- embedding space -->
+    <rect x="470" y="40" width="410" height="190" rx="12" fill="#fbfcfe" stroke="#e2e7ee"/>
+    <text x="675" y="60" text-anchor="middle" fill="#5b6878" font-size="11">embedding space + projection head</text>
+
+    <!-- subject A cluster -->
+    <circle cx="600" cy="120" r="9" fill="#0f766e"/>
+    <circle cx="624" cy="106" r="9" fill="#0f766e"/>
+    <circle cx="612" cy="142" r="9" fill="#0f766e"/>
+    <circle cx="585" cy="135" r="9" fill="#0f766e"/>
+    <ellipse cx="606" cy="126" rx="46" ry="40" fill="none" stroke="#0f766e" stroke-dasharray="4 3"/>
+    <text x="606" y="186" text-anchor="middle" fill="#0f766e" font-weight="700">Subject A · nights pull together</text>
+
+    <!-- subject B cluster -->
+    <circle cx="775" cy="95" r="9" fill="#b45309"/>
+    <circle cx="800" cy="110" r="9" fill="#b45309"/>
+    <circle cx="788" cy="78" r="9" fill="#b45309"/>
+    <ellipse cx="788" cy="94" rx="36" ry="32" fill="none" stroke="#b45309" stroke-dasharray="4 3"/>
+    <text x="788" y="150" text-anchor="middle" fill="#b45309" font-weight="700" font-size="11">Subject B · pushed apart</text>
+
+    <!-- left: nights feeding in -->
+    <g text-anchor="middle">
+      <rect x="40" y="55"  width="150" height="30" rx="7" fill="#e7f3f1" stroke="#bfe0da"/><text x="115" y="75">A · night 1</text>
+      <rect x="40" y="95"  width="150" height="30" rx="7" fill="#e7f3f1" stroke="#bfe0da"/><text x="115" y="115">A · night 2</text>
+      <rect x="40" y="135" width="150" height="30" rx="7" fill="#e7f3f1" stroke="#bfe0da"/><text x="115" y="155">A · night 3</text>
+      <rect x="40" y="180" width="150" height="30" rx="7" fill="#fbeee0" stroke="#f0d5b4"/><text x="115" y="200">B · night 1</text>
+    </g>
+    <!-- encoder -->
+    <rect x="250" y="95" width="120" height="70" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+    <text x="310" y="126" text-anchor="middle" font-weight="700">Encoder</text>
+    <text x="310" y="144" text-anchor="middle" fill="#5b6878" font-size="11">pool → proj</text>
+    <g stroke="#5b6878" stroke-width="1.4" marker-end="url(#ar2)">
+      <line x1="190" y1="70"  x2="248" y2="110"/>
+      <line x1="190" y1="110" x2="248" y2="123"/>
+      <line x1="190" y1="150" x2="248" y2="138"/>
+      <line x1="190" y1="195" x2="248" y2="150"/>
+      <line x1="370" y1="128" x2="466" y2="128"/>
+    </g>
+  </g>
+</svg>
+<div class="cap">Figure 4 — Supervised contrastive loss with subject ID as the positive key. <code>SupConLoss</code> already exists in the repo; we add an optional pooled embedding to <code>MBA4TSO_Patch.forward</code> and a small projection head.</div>
+</div>
+
+<div class="two">
+  <div class="card" style="margin:6px 0">
+    <h3 style="margin-top:4px">Why it helps under label noise</h3>
+    <p class="small">The objective is grounded in the <em>data</em> (who recorded the night), not in the noisy labels, so it regularizes the representation toward real sleep structure and away from labeler artifacts. It pairs naturally with self-supervised contrastive pretraining (TS-TCC / TF-C) on the large pool of unlabeled wear-time.</p>
+  </div>
+  <div class="card" style="margin:6px 0">
+    <h3 style="margin-top:4px">Two guardrails</h3>
+    <p class="small"><strong>Avoid the identity shortcut:</strong> keep the contrastive loss on a separate projection head with a modest weight (≈0.1–0.3), so the model encodes sleep structure rather than re-identifying subjects. <strong>Tie it to TSO:</strong> optionally add an intra-subject consistency penalty on predicted onset/duration variance — the prior expressed in the output space where it matters.</p>
+  </div>
+</div>
+
+<!-- ============================================================= -->
+<h2>5. Innovation 3 — Predict structure, not pixels</h2>
+<p class="lead">Because TSO is a single contiguous interval, the strongest output-side change is to stop making 1,440 independent decisions and instead enforce one block. This both raises accuracy and produces clinically meaningful output (one onset, one offset).</p>
+
+<div class="fig">
+<svg viewBox="0 0 900 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Structured single-interval output">
+  <g font-family="inherit" font-size="12.5">
+    <!-- left: fragmented per-minute -->
+    <text x="210" y="26" text-anchor="middle" font-weight="700" fill="#b91c1c">Per-minute argmax (fragmented)</text>
+    <line x1="40" y1="90" x2="380" y2="90" stroke="#cdd6e2"/>
+    <g fill="#3b5bdb" opacity=".8">
+      <rect x="120" y="74" width="55" height="16"/>
+      <rect x="185" y="74" width="20" height="16"/>
+      <rect x="220" y="74" width="80" height="16"/>
+      <rect x="312" y="74" width="18" height="16"/>
+    </g>
+    <text x="210" y="120" text-anchor="middle" fill="#5b6878" font-size="11">gaps &amp; specks need post-hoc smoothing</text>
+
+    <!-- arrow -->
+    <g stroke="#5b6878" stroke-width="1.8" marker-end="url(#ar2)">
+      <line x1="410" y1="82" x2="470" y2="82"/>
+    </g>
+    <rect x="408" y="92" width="74" height="34" rx="8" fill="#e7f3f1" stroke="#bfe0da"/>
+    <text x="445" y="113" text-anchor="middle" font-weight="700" fill="#0b5e57" font-size="11">CRF / interval</text>
+
+    <!-- right: single block -->
+    <text x="690" y="26" text-anchor="middle" font-weight="700" fill="#15803d">Single contiguous TSO</text>
+    <line x1="520" y1="90" x2="860" y2="90" stroke="#cdd6e2"/>
+    <rect x="600" y="74" width="200" height="16" fill="#15803d" opacity=".8"/>
+    <line x1="600" y1="64" x2="600" y2="100" stroke="#15803d" stroke-width="1.6"/>
+    <line x1="800" y1="64" x2="800" y2="100" stroke="#15803d" stroke-width="1.6"/>
+    <text x="600" y="58" text-anchor="middle" fill="#15803d" font-size="11">onset</text>
+    <text x="800" y="58" text-anchor="middle" fill="#15803d" font-size="11">offset</text>
+    <text x="690" y="120" text-anchor="middle" fill="#5b6878" font-size="11">structure enforced by the model, not a smoother</text>
+
+    <text x="450" y="175" text-anchor="middle" font-weight="700">Options: differentiable CRF · learned HMM output layer · direct onset/offset regression</text>
+    <text x="450" y="196" text-anchor="middle" fill="#5b6878" font-size="11">The existing <tspan font-style="italic">tso_continuity_loss</tspan> is a soft step toward this; a CRF makes it principled.</text>
+  </g>
+</svg>
+<div class="cap">Figure 5 — Moving the single-interval prior from a post-processing heuristic into the model. Boundary-uncertainty (evidential) heads can additionally report calibrated confidence at the contested edges.</div>
+</div>
+
+<!-- ============================================================= -->
+<h2>6. Validation without TSO ground truth</h2>
+<p class="lead">We do not have reliable TSO ground truth, so we cannot directly score sleep-window accuracy. The fix is not one metric but a <strong>three-tier strategy</strong> — a downstream proxy that measures what TSO is <em>for</em>, a label-free consistency check, and a small gold set to anchor both.</p>
+
+<div class="callout">
+<strong>The problem with the status quo.</strong> Early stopping currently runs on noisy <code>val_loss</code> and <code>dataset_test = dataset_val</code>, so "best model" today means "best mimic of the traditional algorithm." None of the three innovations is provable until this changes.
+</div>
+
+<h3><span class="num">1</span>Downstream proxy — scratch detection (primary)</h3>
+<p>TSO exists to gate/normalize nocturnal scratch quantification, so a better TSO should yield better downstream scratch metrics. <strong>Crucially, our scratch ground-truth labels are independent of the TSO window</strong> (annotated over the full recording, not inside the traditional algorithm's sleep window), so this proxy is <em>not</em> circular — improving downstream scratch performance cannot be achieved merely by agreeing with the traditional TSO.</p>
+<p>Experimental design: hold the finished Deep&nbsp;Scratch model <strong>fixed</strong>, swap <em>only</em> the TSO source feeding it, and report scratch metrics on nights with scratch GT. This isolates TSO quality as the single moving part.</p>
+
+<div class="fig">
+<svg viewBox="0 0 900 210" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="TSO swap experiment">
+  <g font-family="inherit" font-size="12.5">
+    <text x="20" y="22" font-weight="700">Swap only the TSO source; everything downstream is fixed</text>
+    <!-- TSO sources -->
+    <rect x="20" y="50"  width="170" height="30" rx="7" fill="#f1f4f8" stroke="#cdd6e2"/><text x="105" y="70" text-anchor="middle">Traditional TSO (baseline)</text>
+    <rect x="20" y="92"  width="170" height="30" rx="7" fill="#e7f3f1" stroke="#bfe0da"/><text x="105" y="112" text-anchor="middle" fill="#0b5e57">Deep TSO v1 (GCE)</text>
+    <rect x="20" y="134" width="170" height="30" rx="7" fill="#e7f3f1" stroke="#bfe0da"/><text x="105" y="154" text-anchor="middle" fill="#0b5e57">Deep TSO v2 (+consensus)</text>
+    <!-- fixed scratch model -->
+    <rect x="320" y="80" width="180" height="56" rx="10" fill="#eef2f7" stroke="#cdd6e2"/>
+    <text x="410" y="104" text-anchor="middle" font-weight="700">FIXED scratch model</text>
+    <text x="410" y="122" text-anchor="middle" fill="#5b6878" font-size="11">+ scratch GT (independent)</text>
+    <!-- output -->
+    <rect x="630" y="80" width="240" height="56" rx="10" fill="#e7f3f1" stroke="#bfe0da"/>
+    <text x="750" y="104" text-anchor="middle" font-weight="700" fill="#0b5e57">Scratch metrics per TSO source</text>
+    <text x="750" y="122" text-anchor="middle" fill="#0b5e57" font-size="11">F1 · scratch index / h of TSO</text>
+    <g stroke="#5b6878" stroke-width="1.5" marker-end="url(#ar2)">
+      <line x1="190" y1="65"  x2="318" y2="98"/>
+      <line x1="190" y1="107" x2="318" y2="108"/>
+      <line x1="190" y1="149" x2="318" y2="118"/>
+      <line x1="500" y1="108" x2="628" y2="108"/>
+    </g>
+    <text x="450" y="192" text-anchor="middle" fill="#5b6878" font-size="11">Use TSO-dependent metrics (per-hour-of-TSO) so the proxy is sensitive to boundary errors.</text>
+  </g>
+</svg>
+<div class="cap">Figure 6 — Extrinsic validation. Because scratch GT is independent of TSO, downstream gains reflect genuine TSO improvement, not agreement with the traditional labeler.</div>
+</div>
+<p class="small"><strong>Sensitivity caveat:</strong> most scratch events sit in the sleep interior, so blunt window-agnostic metrics may barely move under boundary errors. Use TSO-normalized metrics (scratch index per hour of TSO, total scratch time within window) and inspect nights where scratch occurs near the edges.</p>
+
+<h3><span class="num">2</span>Cross-night consistency (label-free)</h3>
+<p>A correct TSO should give the <em>same subject</em> consistent onset/offset/duration across nights. Low intra-subject variance is therefore weak evidence of quality with no labels at all — and it is the <strong>same prior as Innovation&nbsp;2</strong>, now doing double duty as a validation signal.</p>
+
+<h3><span class="num">3</span>Small gold-standard anchor</h3>
+<p>Even 10–20 expert- or PSG-scored nights, reserved purely for model selection and final reporting, calibrate the proxy and catch <em>target drift</em> (a TSO that helps scratch but drifts from physiological sleep). Proxy + small gold set is far stronger than either alone. This is the one remaining data question for the manager.</p>
+
+<!-- ============================================================= -->
+<h2>7. Proposed phased plan</h2>
+<table>
+  <thead><tr><th>Phase</th><th>Change</th><th>Repo touch-points</th><th>Risk</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tag t-now">NOW</span></td>
+      <td>GCE robust loss for TSO</td>
+      <td><code>measure_loss_tso</code> (reuse <code>GCELoss</code>)</td><td>Low · 1 function</td></tr>
+    <tr><td><span class="tag t-now">NOW</span></td>
+      <td>Cross-night SupCon hook</td>
+      <td><code>MBA4TSO_Patch.forward</code> (return pooled embed) + <code>train_tso_patch_h5.py</code> loss</td><td>Low · existing <code>SupConLoss</code></td></tr>
+    <tr><td><span class="tag t-next">NEXT</span></td>
+      <td>Multi-annotator consensus weighting</td>
+      <td>H5 build (store ≥2 label tracks) + weighted loss</td><td>Med · needs extra labels</td></tr>
+    <tr><td><span class="tag t-next">NEXT</span></td>
+      <td>Validation: downstream scratch proxy + cross-night consistency + small gold set</td>
+      <td>fixed scratch model, swap TSO source; early-stopping criterion</td><td>Med · small gold set needed</td></tr>
+    <tr><td><span class="tag t-later">LATER</span></td>
+      <td>Structured output (CRF / interval head)</td>
+      <td>new output module, replaces post-hoc smoothing</td><td>Higher · architectural</td></tr>
+    <tr><td><span class="tag t-later">LATER</span></td>
+      <td>SSL contrastive pretraining (TS-TCC/TF-C)</td>
+      <td><code>training/pretrain.py</code></td><td>Higher · separate stage</td></tr>
+    <tr><td colspan="4" class="small" style="color:var(--muted)">Deferred this version: DivideMix-style GMM clean/noisy split (revisit once consensus weighting is in place).</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================= -->
+<h2>8. Baselines &amp; comparison targets</h2>
+<table>
+  <thead><tr><th>Category</th><th>Method</th><th>Role in our study</th><th>Ref.</th></tr></thead>
+  <tbody>
+    <tr><td rowspan="4">Traditional TSO / sleep</td>
+        <td>Sadeh activity index</td><td>baseline (also a label source)</td><td>[1]</td></tr>
+    <tr><td>Cole–Kripke</td><td>baseline (also a label source)</td><td>[2]</td></tr>
+    <tr><td>van Hees HDCZA (GGIR)</td><td>baseline (also a label source)</td><td>[3]</td></tr>
+    <tr><td>Sundararajan random forest</td><td>classical ML baseline</td><td>[4]</td></tr>
+    <tr><td rowspan="3">Deep sleep / sequence models</td>
+        <td>DeepSleepNet (CNN+BiLSTM)</td><td>deep baseline</td><td>[5]</td></tr>
+    <tr><td>U-Sleep / U-Time (fully-conv U-Net)</td><td>deep baseline</td><td>[6]</td></tr>
+    <tr><td>Mamba (selective SSM)</td><td>our backbone</td><td>[7]</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================= -->
+<h2>References</h2>
+<h3 style="margin-top:8px">Baselines (Section 8)</h3>
+<div>
+  <p class="ref">[1] Sadeh A., Sharkey K.M., Carskadon M.A. <b>Activity-based sleep–wake identification: an empirical test of methodological issues.</b> <i>Sleep</i> 17(3):201–207, 1994.</p>
+  <p class="ref">[2] Cole R.J., Kripke D.F., Gruen W., Mullaney D.J., Gillin J.C. <b>Automatic sleep/wake identification from wrist activity.</b> <i>Sleep</i> 15(5):461–469, 1992.</p>
+  <p class="ref">[3] van Hees V.T. et&nbsp;al. <b>Estimating sleep parameters using an accelerometer without sleep diary.</b> <i>Scientific Reports</i> 8:12975, 2018. <a href="https://www.nature.com/articles/s41598-018-31266-z">doi:10.1038/s41598-018-31266-z</a></p>
+  <p class="ref">[4] Sundararajan K. et&nbsp;al. <b>Sleep classification from wrist-worn accelerometer data using random forests.</b> <i>Scientific Reports</i> 11:24, 2021. <a href="https://www.nature.com/articles/s41598-020-79217-x">doi:10.1038/s41598-020-79217-x</a></p>
+  <p class="ref">[5] Supratak A., Dong H., Wu C., Guo Y. <b>DeepSleepNet: a model for automatic sleep stage scoring based on raw single-channel EEG.</b> <i>IEEE TNSRE</i> 25(11):1998–2008, 2017. <a href="https://arxiv.org/abs/1703.04046">arXiv:1703.04046</a></p>
+  <p class="ref">[6] Perslev M. et&nbsp;al. <b>U-Sleep: resilient high-frequency sleep staging.</b> <i>npj Digital Medicine</i> 4:72, 2021. <a href="https://www.nature.com/articles/s41746-021-00440-5">doi:10.1038/s41746-021-00440-5</a> (see also U-Time, <i>NeurIPS</i> 2019)</p>
+  <p class="ref">[7] Gu A., Dao T. <b>Mamba: linear-time sequence modeling with selective state spaces.</b> 2023. <a href="https://arxiv.org/abs/2312.00752">arXiv:2312.00752</a></p>
+</div>
+<h3>Methods adopted in this proposal (Sections 3–5)</h3>
+<div>
+  <p class="ref">[8] Zhang Z., Sabuncu M.R. <b>Generalized Cross Entropy loss for training deep neural networks with noisy labels.</b> <i>NeurIPS</i>, 2018. <a href="https://arxiv.org/abs/1805.07836">arXiv:1805.07836</a></p>
+  <p class="ref">[9] Wang Y., Ma X., Chen Z., Luo Y., Yi J., Bailey J. <b>Symmetric Cross Entropy for robust learning with noisy labels.</b> <i>ICCV</i>, 2019. <a href="https://arxiv.org/abs/1908.06112">arXiv:1908.06112</a></p>
+  <p class="ref">[10] Rodrigues F., Pereira F.C. <b>Deep learning from crowds.</b> <i>AAAI</i>, 2018. <a href="https://arxiv.org/abs/1709.01779">arXiv:1709.01779</a></p>
+  <p class="ref">[11] Goldberger J., Ben-Reuven E. <b>Training deep neural networks using a noise adaptation layer.</b> <i>ICLR</i>, 2017. <a href="https://openreview.net/forum?id=H12GRgcxg">openreview</a></p>
+  <p class="ref">[12] Khosla P. et&nbsp;al. <b>Supervised Contrastive Learning.</b> <i>NeurIPS</i>, 2020. <a href="https://arxiv.org/abs/2004.11362">arXiv:2004.11362</a></p>
+  <p class="ref">[13] Chen T., Kornblith S., Norouzi M., Hinton G. <b>A simple framework for contrastive learning of visual representations (SimCLR).</b> <i>ICML</i>, 2020. <a href="https://arxiv.org/abs/2002.05709">arXiv:2002.05709</a></p>
+  <p class="ref">[14] Eldele E. et&nbsp;al. <b>Time-series representation learning via temporal and contextual contrasting (TS-TCC).</b> <i>IJCAI</i>, 2021. <a href="https://arxiv.org/abs/2106.14112">arXiv:2106.14112</a></p>
+  <p class="ref">[15] Zhang X., Zhao Z., Tsiligkaridis T., Zitnik M. <b>Self-supervised contrastive pre-training for time series via time-frequency consistency (TF-C).</b> <i>NeurIPS</i>, 2022. <a href="https://arxiv.org/abs/2206.08496">arXiv:2206.08496</a></p>
+  <p class="ref">[16] Lafferty J., McCallum A., Pereira F. <b>Conditional Random Fields: probabilistic models for segmenting and labeling sequence data.</b> <i>ICML</i>, 2001.</p>
+  <p class="ref">[17] Sensoy M., Kaplan L., Kandemir M. <b>Evidential deep learning to quantify classification uncertainty.</b> <i>NeurIPS</i>, 2018. <a href="https://arxiv.org/abs/1806.01768">arXiv:1806.01768</a></p>
+</div>
+
+<p class="small" style="margin-top:34px;color:var(--muted)">Draft for internal discussion. Section 6 (validation data) and the NEXT-phase items are open questions to resolve with the manager before implementation begins.</p>
+
+</div>
+</body>
+</html>

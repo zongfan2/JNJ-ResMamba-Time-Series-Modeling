@@ -8,8 +8,11 @@ All outputs land under `/mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ/`
 | Sweep | Arms | Paper claim |
 |---|---|---|
 | **E2/E3 ablation** (`run_deep_tso_ablation.sh`) | baseline (CE) · ce_supcon · gce · gce_supcon · gce_elr · structural · structural_3class | C2 (structured-noise lens), C3 (SupCon isolation) |
-| E1 architecture | `--skip_connect`/`--skip_cross_attention`/`--output_channels` toggles | C1 (backbone) — *configs TBD* |
+| **E3′ consistency** (`deep_tso_phase1_consistency.yaml`) | CE+consistency vs CE (`--w_consistency 0`); positive-only, multi-GPU | C3′ (positive-only cross-night consistency) |
+| **E1 architecture** (`run_deep_tso_e1.sh`) | full · no_mamba · no_patch · no_resnet · no_skip | C1 (backbone) — configs built |
 | E4 structured output | `deep_tso_phase1_interval.yaml` (onset/offset head) | C4 — head + loss built; verify on Domino |
+
+Full design spec & per-experiment commands: `docs/deep_tso_experiment_plan.md`.
 
 All arms are **4-fold LOFO** (subject-independent), class-balanced (CE *and* GCE get
 `pos_weight`, so loss families are comparable), outputs nested under `DeepTSO-JNJ`.

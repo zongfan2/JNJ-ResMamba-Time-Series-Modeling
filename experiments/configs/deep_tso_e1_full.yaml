@@ -1,0 +1,34 @@
+# E1 architecture ablation — FULL backbone reference (C1).
+# Identical training recipe to deep_tso_phase1_baseline.yaml (class-balanced CE,
+# subject-independent LOFO), with the architecture knobs pinned EXPLICITLY so the
+# component-removal arms below read as one-line deltas from this file.
+experiment:
+  name: deep_tso_e1_full
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+  blocks_mba: 5             # Mamba state-space encoder blocks  (E1: 0 removes them)
+  num_feature_layers: 6     # ResNet feature-extractor depth    (E1: 0 removes it)
+  featurelayer: ResNet
+  skip_connect: true        # U-Net skips                       (E1: false removes them)
+  skip_cross_attention: false
+training:
+  output: deep_tso_e1_full
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
+  testing: LOFO
+  num_folds: 4
+  batch_size: 8
+  epochs: 60
+  lr: 0.001
+loss:
+  base_loss: ce
+  components:
+    w_trans: 0.0
+    w_dur: 0.0
+    w_elr: 0.0
+    w_supcon: 0.0
+evaluation:
+  enforce_single_tso: true

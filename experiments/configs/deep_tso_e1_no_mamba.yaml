@@ -1,0 +1,33 @@
+# E1 architecture ablation — REMOVE the Mamba state-space encoder blocks.
+# One-line delta from deep_tso_e1_full.yaml: blocks_mba 5 -> 0 (num_encoder_layers=0),
+# so the patch+feature representation goes straight to the per-minute output head.
+experiment:
+  name: deep_tso_e1_no_mamba
+data:
+  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
+  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+model:
+  architecture: mba4tso_patch
+  projection_dim: 128
+  blocks_mba: 0             # <-- ablation: no Mamba blocks
+  num_feature_layers: 6
+  featurelayer: ResNet
+  skip_connect: true
+  skip_cross_attention: false
+training:
+  output: deep_tso_e1_no_mamba
+  output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
+  testing: LOFO
+  num_folds: 4
+  batch_size: 8
+  epochs: 60
+  lr: 0.001
+loss:
+  base_loss: ce
+  components:
+    w_trans: 0.0
+    w_dur: 0.0
+    w_elr: 0.0
+    w_supcon: 0.0
+evaluation:
+  enforce_single_tso: true

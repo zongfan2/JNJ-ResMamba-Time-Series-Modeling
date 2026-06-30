@@ -11,7 +11,7 @@ from mamba_ssm import Mamba
 from .mamba_blocks import MBA, AffineDropPath
 from .attention import AttModule_mamba, AttModule_mamba_cross, MultiHeadSelfAttentionPooling, MaskedMaxAvgPooling
 from .components import FeatureExtractor, ConvProjection
-from .specialized import PatchEmbedding
+from .specialized import PatchEmbedding, StatPatchEmbedding
 
 # Primary ResMamba models
 
@@ -840,6 +840,7 @@ class MBA4TSO_Patch(nn.Module):
         output_channels=3,
         projection_dim=128,
         interval_head=False,
+        patch_embed="conv",
     ):
         super().__init__()
         self.num_feature_layers = num_feature_layers
@@ -854,12 +855,21 @@ class MBA4TSO_Patch(nn.Module):
         # decoded to one contiguous interval (no post-hoc smoothing).
         self.interval_head = interval_head
 
-        self.patch_embedding = PatchEmbedding(
-            patch_size=patch_size,
-            in_channels=patch_channels,
-            num_filters=num_filters,
-            norm=norm1,
-        )
+        # E1 ablation knob: "conv" = strided-conv intra-minute encoder (default);
+        # "stat" = non-convolutional mean/std summary + linear projection.
+        if patch_embed == "stat":
+            self.patch_embedding = StatPatchEmbedding(
+                patch_size=patch_size,
+                in_channels=patch_channels,
+                num_filters=num_filters,
+            )
+        else:
+            self.patch_embedding = PatchEmbedding(
+                patch_size=patch_size,
+                in_channels=patch_channels,
+                num_filters=num_filters,
+                norm=norm1,
+            )
 
         self.feature_extractor = None
         if num_feature_layers > 0:

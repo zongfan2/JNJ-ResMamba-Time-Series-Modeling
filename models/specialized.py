@@ -89,6 +89,31 @@ class PatchEmbedding(nn.Module):
         return x
 
 
+class StatPatchEmbedding(nn.Module):
+    """Non-convolutional patch embedding (E1 ablation for the conv patch embedder).
+
+    Replaces the strided-conv intra-minute encoder of ``PatchEmbedding`` with simple
+    per-patch summary statistics (mean and std over the patch_size samples) followed by
+    a single linear projection. It therefore keeps the coarse per-minute level/energy
+    but discards all learned intra-minute (20 Hz) texture, isolating the contribution of
+    the convolutional patch embedding. Same I/O contract as ``PatchEmbedding``:
+    [batch_size, seq_len, patch_size, channels] -> [batch_size, seq_len, num_filters].
+    """
+
+    def __init__(self, patch_size=1200, in_channels=5, num_filters=64, **_unused):
+        super().__init__()
+        # mean & std per channel -> 2*in_channels features, then project to num_filters.
+        self.proj = nn.Linear(2 * in_channels, num_filters)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        """x: [B, seq_len, patch_size, channels] -> [B, seq_len, num_filters]."""
+        mean = x.mean(dim=2)                       # [B, seq_len, channels]
+        std = x.std(dim=2)                         # [B, seq_len, channels]
+        feats = torch.cat([mean, std], dim=-1)     # [B, seq_len, 2*channels]
+        return self.act(self.proj(feats))
+
+
 class PatchTSTHead(nn.Module):
     def __init__(self, config: PatchTSTConfig):
         super(PatchTSTHead, self).__init__()

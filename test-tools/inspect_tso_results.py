@@ -203,6 +203,14 @@ def inspect(path, save_plots=False):
         print(f"    nights both-TSO: {fmt(tm.get('gt_n_nights_both_tso'))} | "
               f"pred-has-TSO: {fmt(tm.get('gt_pred_has_tso_rate'))} | "
               f"gt-has-TSO: {fmt(tm.get('gt_gt_has_tso_rate'))}")
+        # Cross-dataset stability: spread across the noprod TEST subjects (the
+        # variance-reduction evidence for C3/C3', replacing per-fold std).
+        if tm.get("gt_model_iou_subj_std") is not None:
+            print(f"    across-test-subject (n={fmt(tm.get('gt_model_n_test_subjects'))}): "
+                  f"IoU {fmt(tm.get('gt_model_iou_subj_mean'))} +/- "
+                  f"{fmt(tm.get('gt_model_iou_subj_std'))}  | "
+                  f"onset-MAE +/- {fmt(tm.get('gt_model_onset_mae_min_subj_std'))} | "
+                  f"offset-MAE +/- {fmt(tm.get('gt_model_offset_mae_min_subj_std'))}")
 
     history_summary(data.get("history", {}))
     if save_plots:
@@ -226,6 +234,10 @@ def inspect(path, save_plots=False):
         "gt_model_f1": tm.get("gt_model_f1"),
         "gt_model_onset_mae": tm.get("gt_model_onset_mae_min"),
         "gt_model_offset_mae": tm.get("gt_model_offset_mae_min"),
+        # cross-dataset across-test-subject spread (stability evidence; C3/C3')
+        "gt_model_iou_subj_mean": tm.get("gt_model_iou_subj_mean"),
+        "gt_model_iou_subj_std": tm.get("gt_model_iou_subj_std"),
+        "gt_model_n_test_subjects": tm.get("gt_model_n_test_subjects"),
         # van-Hees reference (same inTSO anchor) — aggregated alongside the model
         "gt_vanhees_iou": tm.get("gt_vanhees_iou"),
         "gt_vanhees_f1": tm.get("gt_vanhees_f1"),

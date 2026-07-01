@@ -1,20 +1,19 @@
 experiment:
   name: deep_tso_phase1_consistency
 data:
-  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
-  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+  # CROSS-DATASET: train/val carved from UKB (predictTSO only); test = ALL of noprod.
+  input_h5: /mnt/data/GENEActive-featurized/h5/ukb_20hz_sincos.h5
+  test_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
 model:
   architecture: mba4tso_patch
   projection_dim: 128
 training:
   output: deep_tso_phase1_consistency
   output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
-  testing: LOFO
-  num_folds: 4
   # Larger batch for the 4-GPU A40 run (DataParallel splits this across GPUs;
   # ~12/GPU here). The cross-night terms benefit from a bigger contrastive set:
   # batch of 48 with nights_per_group=4 packs up to ~12 subjects x 4 nights.
-  batch_size: 48
+  batch_size: 48   # cross-dataset 4-GPU DataParallel (~12/GPU)
   epochs: 60
   lr: 0.001
 loss:

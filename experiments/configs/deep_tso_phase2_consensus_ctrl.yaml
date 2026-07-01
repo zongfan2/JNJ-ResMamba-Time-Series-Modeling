@@ -1,5 +1,9 @@
+# Phase-2 CONTROL: identical to deep_tso_phase2_consensus.yaml but with annotator-
+# consensus weighting OFF. Same consensus H5 (so same data/split) and same GCE+SupCon
+# recipe, so the only change vs Phase 2 is use_consensus_weight -> the matched pair
+# isolates the consensus-weighting effect.
 experiment:
-  name: deep_tso_phase2_consensus
+  name: deep_tso_phase2_consensus_ctrl
 data:
   input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_consensus.h5
   split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_consensus_split.npz
@@ -7,19 +11,17 @@ model:
   architecture: mba4tso_patch
   projection_dim: 128
 training:
-  output: deep_tso_phase2_consensus
+  output: deep_tso_phase2_consensus_ctrl
   output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
-  testing: LOFO        # subject-independent CV (match Phase-1; without this it
-  num_folds: 4         # silently falls back to the leaky random-by-night split)
-  batch_size: 8   # raw-patch model is activation-heavy; 24 OOMs a 22GB GPU
+  testing: LOFO
+  num_folds: 4
+  batch_size: 8
   epochs: 60
   lr: 0.001
 loss:
   base_loss: gce
   gce_q: 0.7
-  use_consensus_weight: true
-  # Structural priors OFF: this arm isolates annotator-consensus weighting
-  # on top of GCE + SupCon.
+  use_consensus_weight: false   # <-- the single change vs deep_tso_phase2_consensus
   components:
     w_trans: 0.0
     w_dur: 0.0

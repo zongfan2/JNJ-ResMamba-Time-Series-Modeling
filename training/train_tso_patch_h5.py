@@ -875,6 +875,7 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
                 tso_class = 2 if num_out_channels > 1 else 1
                 model_bin = (pred_seq == tso_class).astype(int)
                 gt_records.append({
+                    "subject": batch_samples[i]["subject"],
                     "model": interval_agreement(pred_seq, gt_seq, timestep_minutes=1.0),
                     "vanhees": interval_agreement(vanhees_seq, gt_seq, timestep_minutes=1.0),
                 })
@@ -1016,12 +1017,34 @@ def run_model_tso_h5(model, dataset, batch_size, train_mode, device, optimizer, 
         def _nanmean(key, who):
             vals = [r[who][key] for r in gt_records if not np.isnan(r[who][key])]
             return float(np.mean(vals)) if vals else float("nan")
+        # Per-TEST-SUBJECT spread: the cross-dataset design (train UKB / test noprod)
+        # is a single split, so the cross-subject stability claim (C3/C3') is read off
+        # the spread across the many noprod TEST subjects rather than across CV folds.
+        # For each metric: average per subject's nights, then take the std across
+        # subjects -> "{tag}_{key}_subj_std" (lower = more stable across subjects).
+        def _subject_spread(key, who):
+            by_subj = {}
+            for r in gt_records:
+                v = r[who][key]
+                if not np.isnan(v):
+                    by_subj.setdefault(r["subject"], []).append(v)
+            per_subj = [float(np.mean(v)) for v in by_subj.values() if v]
+            if not per_subj:
+                return float("nan"), float("nan"), 0
+            return float(np.mean(per_subj)), float(np.std(per_subj)), len(per_subj)
+
         for who, tag in (("model", "gt_model"), ("vanhees", "gt_vanhees")):
             metrics[f"{tag}_onset_mae_min"] = _nanmean("onset_mae_min", who)
             metrics[f"{tag}_offset_mae_min"] = _nanmean("offset_mae_min", who)
             metrics[f"{tag}_duration_err_h"] = _nanmean("duration_err_h", who)
             iou_vals = [r[who]["iou"] for r in gt_records if not np.isnan(r[who]["iou"])]
             metrics[f"{tag}_iou"] = float(np.mean(iou_vals)) if iou_vals else float("nan")
+            # cross-subject mean + std (the headline stability numbers)
+            for key in ("iou", "onset_mae_min", "offset_mae_min"):
+                mu, sd, n_subj = _subject_spread(key, who)
+                metrics[f"{tag}_{key}_subj_mean"] = mu
+                metrics[f"{tag}_{key}_subj_std"] = sd
+            metrics[f"{tag}_n_test_subjects"] = n_subj
         gt_arr = np.array(gt_pm); model_arr = np.array(model_pm); vh_arr = np.array(vanhees_pm)
         metrics["gt_model_f1"] = f1_score(gt_arr, model_arr, zero_division=0)
         metrics["gt_vanhees_f1"] = f1_score(gt_arr, vh_arr, zero_division=0)

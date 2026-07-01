@@ -35,31 +35,32 @@ Companion: `experiments/domino/README_deep_tso.md` (operational notes),
 
 **Shared protocol (applies to all supervised arms unless noted):**
 
-- **Cross-validation:** 4-fold **LOFO** (subject-independent). Held-out fold = test;
-  10% random carve of the remaining nights = validation (model selection / early
-  stopping only). No subject appears in more than one of {train, val, test}.
-  (`testing: LOFO`, `num_folds: 4` in every config.)
+- **Cross-cohort split (THE design):** train/val on **UKB** (`predictTSO` only; 10%
+  random carve = validation for selection/early-stopping), test on **ALL of noprod**
+  (carries the cleaner `inTSO` anchor). One split, not k-fold — set by `input_h5: ukb…`
+  + `test_h5: …noprod…` in every config. The cohorts are disjoint, so test = genuine
+  cross-cohort generalization. (The old in-domain noprod LOFO design has been removed.)
 - **Class balancing:** CE uses `BCEWithLogitsLoss(pos_weight = n_neg/n_pos)` (per-batch,
   capped at 50); the GCE family is wrapped with the **same** `pos_weight` so loss
-  families are comparable. This is the "fairness fix" — all final E2 numbers are under
-  this matched regime.
-- **Metrics** (computed every run, vs the cleaner `inTSO` anchor): **IoU**,
-  **onset MAE**, **offset MAE** (minutes), **F1**. Report **mean ± std across the 4
-  folds** + per-fold paired deltas. `f1_tso` (agreement vs the noisy van-Hees
-  `predictTSO` training label) is **fidelity to the labeler, never the headline**.
+  families are comparable. This is the "fairness fix".
+- **Metrics** (computed every run, vs the cleaner `inTSO` anchor on the noprod test):
+  **IoU**, **onset MAE**, **offset MAE** (minutes), **F1**. Uncertainty = **mean ± std
+  across noprod test subjects** (`gt_*_subj_std`; the stability evidence for C3/C3′,
+  replacing per-fold std). `f1_tso` (agreement vs the noisy van-Hees `predictTSO`
+  training label) is **fidelity to the labeler, never the headline**.
 - **Single-TSO constraint:** `enforce_single_tso: true` (post-hoc) for all arms except
   E4's structured head, which produces one interval by construction.
-- **Batch size:** the raw-patch model is activation-heavy — `batch_size: 8` on a single
-  22 GB GPU (24 OOMs). The cross-night arms (E3) want a larger contrastive/grouping set
-  and are configured for multi-GPU (see §E3).
+- **Batch size:** every config uses `batch_size: 48` across **4 GPUs** (`--multi_gpu`,
+  ~12/GPU); the raw-patch model is activation-heavy, so a single 22 GB GPU OOMs at 48 —
+  drop `GPU=0` + `batch_size` for a single-GPU debug only.
 
 **Setup (once per Domino workspace/job):**
 ```bash
 bash experiments/domino/deep_tso_setup.sh    # installs deps incl. mamba_ssm
 ```
 
-**Smoke-test discipline:** before any full 4-fold sweep, run **one arm on one fold**
-(`--single_fold FOLD1 --epochs 2`) and confirm the per-epoch log shows a non-zero
+**Smoke-test discipline:** before any full sweep, run **one arm for 1 epoch**
+(`--epochs 1`; cross-dataset has no folds, so this trains on full UKB once) and confirm the per-epoch log shows a non-zero
 `F1 TSO`, the `AUC … best-F1 …@thr` diagnostic, and (for cross-night arms) the
 `[supcon] fired on N/M steps` line. Only then launch the sweep.
 
@@ -96,7 +97,7 @@ GT_COLUMN="" \
 All supervised commands follow the same shape; paths come from the YAML, flags only
 **override**:
 ```bash
-python3.11 training/train_tso_patch_h5.py --config <cfg.yaml> --num_gpu 0
+python3.11 training/train_tso_patch_h5.py --config <cfg.yaml> --num_gpu 0,1,2,3 --multi_gpu
 ```
 
 ### E1 — Architecture ablation & baselines  *(paper §E1, Table 4 / "Component removals")*
@@ -107,7 +108,7 @@ python3.11 training/train_tso_patch_h5.py --config <cfg.yaml> --num_gpu 0
 explicit full-backbone reference. Run the whole group with `run_deep_tso_e1.sh`:
 
 ```bash
-bash experiments/domino/run_deep_tso_e1.sh           # full + 4 removals x 4 folds = 20 runs
+bash experiments/domino/run_deep_tso_e1.sh           # full + 4 removals = 5 cross-dataset runs
 ```
 
 | Arm | Config | Delta from full |
@@ -146,19 +147,19 @@ noise is structured at the boundaries). **All arms class-balanced.**
 ```bash
 bash experiments/domino/run_deep_tso_ablation.sh
 ```
-This sweeps (each × 4 LOFO folds):
+This sweeps (each = one cross-dataset run, train UKB / test noprod):
 
 | Arm | Config | Expectation |
 |---|---|---|
 | CE (strong baseline) | `deep_tso_phase1_baseline.yaml` | reference |
 | GCE | `deep_tso_phase1_gce.yaml` | ≤ CE (no help) |
 | GCE + SupCon | `deep_tso_phase1_gce_supcon.yaml` | stability gain |
-| GCE + ELR | `deep_tso_phase1_gce_elr.yaml` | **collapses** on ≥3/4 folds (a result, not a bug) |
+| GCE + ELR | `deep_tso_phase1_gce_elr.yaml` | **collapses** to all-negative (a result, not a bug) |
 | CE + structural priors (gated) | `deep_tso_phase1_structural.yaml` | structure-aware |
 | CE + structural priors, 3-class | `deep_tso_phase1_structural_3class.yaml` | avoids 0.5-threshold collapse |
 | CE + interval head (C4) | `deep_tso_phase1_interval.yaml` | see E4 |
 
-~7 arms × 4 folds ≈ 28 runs (~100 min/run). Comment out arms in the `configs=(…)`
+~7 arms = 7 cross-dataset runs (~100 min/run). Comment out arms in the `configs=(…)`
 array for a subset.
 
 ### E3 — Cross-night regularizer isolation  *(paper §E3, Table 3 + Table 5)*
@@ -170,10 +171,10 @@ peak accuracy). Two matched single-change pairs off the **same class-balanced CE
 ```bash
 # CE baseline (control) — already run in E2
 python3.11 training/train_tso_patch_h5.py \
-  --config experiments/configs/deep_tso_phase1_baseline.yaml --num_gpu 0
+  --config experiments/configs/deep_tso_phase1_baseline.yaml --num_gpu 0,1,2,3 --multi_gpu
 # CE + SupCon
 python3.11 training/train_tso_patch_h5.py \
-  --config experiments/configs/deep_tso_phase1_ce_supcon.yaml --num_gpu 0
+  --config experiments/configs/deep_tso_phase1_ce_supcon.yaml --num_gpu 0,1,2,3 --multi_gpu
 ```
 
 **(ii) Consistency (positive-only) — C3′ (NEW).** The `CE → CE+consistency` pair, which
@@ -208,13 +209,13 @@ Fills: **Table 3** (CE / CE+SupCon / Δ), **Table 5** rows `CE`, `CE+SupCon`,
 regression head, vs per-minute argmax + post-hoc smoothing).
 
 ```bash
-# SMOKE FIRST — confirm the interval loss is finite & decreasing on one fold
+# SMOKE FIRST — confirm the interval loss is finite & decreasing (1 epoch, full UKB)
 python3.11 training/train_tso_patch_h5.py \
   --config experiments/configs/deep_tso_phase1_interval.yaml \
-  --single_fold FOLD1 --epochs 2 --num_gpu 0
-# full 4-fold
+  --epochs 1 --num_gpu 0,1,2,3 --multi_gpu
+# full run (cross-dataset)
 python3.11 training/train_tso_patch_h5.py \
-  --config experiments/configs/deep_tso_phase1_interval.yaml --num_gpu 0
+  --config experiments/configs/deep_tso_phase1_interval.yaml --num_gpu 0,1,2,3 --multi_gpu
 ```
 Compare three decode regimes in Table 6: (1) per-minute argmax + post-hoc smoothing
 (the E2 baseline), (2) soft structural priors (`deep_tso_phase1_structural*`), (3) the
@@ -248,7 +249,7 @@ Uses the **consensus** H5; weights the per-minute supervision by inter-algorithm
 agreement (`use_consensus_weight: true`) on top of GCE+SupCon:
 ```bash
 python3.11 training/train_tso_patch_h5.py \
-  --config experiments/configs/deep_tso_phase2_consensus.yaml --num_gpu 0
+  --config experiments/configs/deep_tso_phase2_consensus.yaml --num_gpu 0,1,2,3 --multi_gpu
 ```
 Requires data build **1b**. Compare against the GCE+SupCon arm from E2.
 
@@ -276,14 +277,15 @@ Requires data build **1c**. This is the strongest test of the C3/C3′ stability
 python3.11 test-tools/inspect_tso_results.py --plots \
   /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
 ```
-Read in order:
-1. **`!! INCOMPLETE: n/4 folds`** — an arm crashed a fold; its mean is untrustworthy.
-2. **FOLD AGGREGATES** — per-arm `mean ± std`. Headlines: `IoU vs GT` and `onset MAE` (vs
-   the `inTSO` anchor), plus the **across-subject IoU std** (the C3/C3′ stability number).
-3. **PAIRWISE SIGNIFICANCE vs baseline** — per-fold paired deltas + win-count + paired-t
-   p-value. With n=4 folds the tests are **underpowered**; report per-fold win-count and
-   mean delta as the honest signal, not significance. `--baseline <substr>` changes the
-   reference arm.
+Read in order (each arm is a single cross-dataset run, so there is one result per arm,
+not a fold aggregate):
+1. **GT (inTSO) — model vs van Hees**: the headline `IoU` / `onset MAE` / `offset MAE` /
+   `F1` of the model and the van-Hees reference, both vs the `inTSO` anchor on the noprod
+   test.
+2. **across-test-subject line**: `IoU mean ± std` (and onset/offset ± std) over the noprod
+   test subjects — **this std is the C3/C3′ stability number** that replaces per-fold std.
+3. Compare arms by their across-subject means and stds (e.g. CE vs CE+SupCon vs
+   CE+consistency); `--baseline <substr>` sets the reference arm for deltas.
 
 Never promote `f1_tso` (fidelity to the noisy labeler) to a headline — the trusted
 metrics are the `gt_*` ones vs `inTSO`.
@@ -294,7 +296,7 @@ metrics are the `gt_*` ones vs `inTSO`.
 
 1. `deep_tso_setup.sh` (once) → **§1** data builds (1a always; 1b for Phase 2; 1c for
    cross-dataset).
-2. Smoke one fold of `ce_supcon` and of `interval` (and of `consistency` on multi-GPU).
+2. Smoke (1 epoch) ce_supcon and interval before the full sweep.
 3. **E2 + E3(i)** sweep (`run_deep_tso_ablation.sh`) — the core of the paper (~28 runs).
 4. **E3(ii)** consistency pair (multi-GPU).
 5. **E4** interval (`deep_tso_phase1_interval.yaml`); **E1** component removals
@@ -304,7 +306,7 @@ metrics are the `gt_*` ones vs `inTSO`.
 
 **Budget:** ~100 min/run × ~40 supervised runs (E1–E4 + pairs) ≈ a few GPU-days on one
 22 GB GPU; the multi-GPU cross-night and cross-dataset arms are faster per epoch but use
-4 GPUs. Sequence the sweeps; don't run all configs blind before the single-fold smoke
+4 GPUs. Sequence the sweeps; don't run all configs blind before the 1-epoch smoke
 passes.
 
 ---

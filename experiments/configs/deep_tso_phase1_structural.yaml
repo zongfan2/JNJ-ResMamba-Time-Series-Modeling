@@ -1,17 +1,16 @@
 experiment:
   name: deep_tso_phase1_structural
 data:
-  input_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
-  split_file: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos_split.npz
+  # CROSS-DATASET: train/val carved from UKB (predictTSO only); test = ALL of noprod.
+  input_h5: /mnt/data/GENEActive-featurized/h5/ukb_20hz_sincos.h5
+  test_h5: /mnt/data/GENEActive-featurized/h5/deep_tso_20hz_sincos.h5
 model:
   architecture: mba4tso_patch
   projection_dim: 128
 training:
   output: deep_tso_phase1_structural
   output_root: /mnt/data/GENEActive-featurized/results/DL/DeepTSO-JNJ
-  testing: LOFO
-  num_folds: 4
-  batch_size: 8
+  batch_size: 48   # cross-dataset 4-GPU DataParallel (~12/GPU)
   epochs: 60
   lr: 0.001
   # Structural priors are GATED until this epoch (train gradient only), so CE can

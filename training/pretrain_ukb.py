@@ -18,7 +18,7 @@ Improvements over base DINO implementation:
 
 Usage (Domino):
     python3.11 /mnt/code/munge/predictive_modeling/code/JNJ-ResMamba-Time-Series-Modeling/training/pretrain_ukb.py \
-        --config experiments/configs/pretrain_ukb_dino.yaml
+        --config experiments/configs/pretrain/pretrain_ukb_dino.yaml
 """
 
 import subprocess

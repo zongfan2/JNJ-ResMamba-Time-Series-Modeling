@@ -53,9 +53,10 @@ JNJ/
 │   ├── CLAUDE.md                  # Project guidelines and philosophy
 │   └── docs/
 │       ├── project_overview.md    # This file
-│       ├── deployment.md          # Deployment and distributed training
 │       ├── algorithms.md          # Post-processing algorithms
-│       └── archive/               # Original detailed docs
+│       ├── deep_tso/              # Deep TSO paper docs (README, experiment_plan)
+│       ├── deployment/            # Deployment and distributed training
+│       └── archive/               # Historical docs
 │
 └── Configuration
     ├── DLRTC_README.md (archived)
@@ -580,4 +581,4 @@ If using this framework in research, please cite foundational works:
 4. **Hyperparameter tuning**: Use smaller epoch configs for rapid iteration
 5. **Production deployment**: Use distributed training for large-scale runs
 
-See `deployment.md` for multi-GPU and cloud deployment instructions.
+See `deployment/README.md` for multi-GPU and cloud deployment instructions.

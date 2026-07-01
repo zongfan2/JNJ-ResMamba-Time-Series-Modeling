@@ -20,7 +20,7 @@ training scripts continues to work unchanged.
 
 Usage (Domino):
     python3.11 training/pretrain_ukb_mae.py \
-        --config experiments/configs/pretrain_ukb_mae.yaml
+        --config experiments/configs/pretrain/pretrain_ukb_mae.yaml
 """
 
 import subprocess

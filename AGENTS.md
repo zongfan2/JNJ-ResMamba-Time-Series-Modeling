@@ -2,6 +2,8 @@
 
 This project implements deep learning models for detecting scratching behavior from 3-channel wearable device signals (accelerometer data: x, y, z). The main focus is on using Mamba (State Space Models) architecture for time series analysis. The codebase has been reorganized into a modular structure supporting two primary research papers: **Deep Scratch** and **Deep TSO**.
 
+> **Per-project agent context:** for Deep TSO work, load `experiments/deep_tso/AGENTS.md` (imported by its sibling `CLAUDE.md`) and see `docs/deep_tso/README.md`. Working under `experiments/deep_tso/` auto-loads that context.
+
 # Code Style and Philosophy (Inspired by The Zen of Python)
 
 - **Readability Counts:** Prioritize clear, self-documenting code. Use descriptive variable and function names.
@@ -87,11 +89,12 @@ project/
 │   ├── configs/         # YAML experiment definitions
 │   └── logs/            # Experiment artifacts and results
 │
-├── docs/                # Documentation
+├── docs/                # Documentation (see docs/README.md index)
 │   ├── project_overview.md # Consolidated architecture and design
-│   ├── deployment.md    # Multi-GPU, distributed training, Domino setup
 │   ├── algorithms.md    # Post-processing algorithms
-│   └── archive/         # Original markdown files
+│   ├── deep_tso/        # Deep TSO paper: README + experiment_plan.md + innovation_report
+│   ├── deployment/      # Multi-GPU, distributed training, Domino/Ray setup
+│   └── archive/         # Superseded / historical docs
 │
 ├── utils/               # Shared utilities
 │   └── common.py        # EarlyStopping, learning rate schedulers, file utilities
@@ -265,7 +268,7 @@ Supported through `training/train_scratch.py`:
 - Automatic distributed data parallel (DDP) on multi-GPU setups
 - Batch size scaling with number of GPUs
 - Gradient accumulation for effective larger batches
-- See `docs/deployment.md` for Domino and distributed setup
+- See `docs/deployment/README.md` for Domino and distributed setup
 
 ## Model Performance Considerations
 
@@ -310,7 +313,7 @@ Supported through `training/train_scratch.py`:
 
 ```bash
 # Training Deep Scratch with H5 data
-python training/train_scratch.py --config experiments/configs/scratch_mba_v1.yaml
+python training/train_scratch.py --config experiments/configs/deep_scratch/scratch_mba_v1.yaml
 
 # TSO training with patches
 python training/train_tso_patch_h5.py --data /path/to/data.h5 --model mba4tso
@@ -319,7 +322,7 @@ python training/train_tso_patch_h5.py --data /path/to/data.h5 --model mba4tso
 python training/pretrain.py --config experiments/configs/pretrain_dino.yaml
 
 # Hyperparameter tuning
-python training/train_scratch.py --config experiments/configs/scratch_mba_v1.yaml --tune
+python training/train_scratch.py --config experiments/configs/deep_scratch/scratch_mba_v1.yaml --tune
 
 # Evaluation and analysis
 python -c "from evaluation.metrics import *; analyze_results('results/experiment_1')"

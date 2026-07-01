@@ -671,4 +671,4 @@ batch_enforce_single_tso(predictions, x_lens, 30, 10)
 3. Monitor clinical validity (don't over-smooth real events)
 4. If still below target, retrain with continuity loss (0.1)
 
-See `project_overview.md` for model details and `deployment.md` for scaling.
+See `project_overview.md` for model details and `deployment/README.md` for scaling.

@@ -17,7 +17,7 @@ Usage:
         --val_size 0.1 \
         --balance_folders
 """
-# Domino dependency installation is handled by experiments/domino/deep_tso_setup.sh.
+# Domino dependency installation is handled by experiments/deep_tso/deep_tso_setup.sh.
 # Keep training modules importable without mutating the environment.
 
 import os

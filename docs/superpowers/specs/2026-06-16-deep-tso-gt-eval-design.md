@@ -97,7 +97,7 @@ gt_n_nights_both_tso, gt_pred_has_tso_rate, gt_gt_has_tso_rate
 These flow into `test_metrics` → the `results_iter_*.joblib`. The existing
 noisy-label metrics are unchanged and kept.
 
-### 4. Build + run — `experiments/domino/build_deep_tso_h5.sh`
+### 4. Build + run — `experiments/deep_tso/build_deep_tso_h5.sh`
 - New `GT_COLUMN` env (default `inTSO`) → `--gt_column`. Rebuild the H5 once so it
   carries `Y_gt`.
 - Evaluate already-trained checkpoints with `--test_only` (loads the best model,

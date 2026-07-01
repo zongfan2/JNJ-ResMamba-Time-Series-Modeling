@@ -8,7 +8,7 @@ scratch labels, model predictions, and mask probabilities.
 
 Usage:
     python evaluation/predict_qualitative.py \
-        --config experiments/configs/scratch_mbav1_deepscratch.yaml \
+        --config experiments/configs/deep_scratch/scratch_mbav1_deepscratch.yaml \
         --checkpoint /path/to/model_weights/mbav1_test_subject_FOLD3_weights.pth \
         --output_dir papers/deep_scratch/fig/qualitative \
         --n_samples 50
@@ -43,7 +43,7 @@ def parse_args():
     )
     parser.add_argument(
         "--config", type=str, required=True,
-        help="Path to YAML experiment config (e.g. experiments/configs/scratch_mbav1_deepscratch.yaml)"
+        help="Path to YAML experiment config (e.g. experiments/configs/deep_scratch/scratch_mbav1_deepscratch.yaml)"
     )
     parser.add_argument(
         "--checkpoint", type=str, required=True,

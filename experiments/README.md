@@ -18,6 +18,28 @@ The framework separates concerns to ensure:
 
 ---
 
+## Directory layout (split by paper)
+
+Configs and run scripts are grouped by paper / purpose (see `configs/README.md`):
+
+```
+experiments/
+├── configs/
+│   ├── deep_tso/       # Deep TSO configs (cross-dataset: train UKB / test noprod)
+│   ├── deep_scratch/   # Deep Scratch configs (+ ablation/, deployment/)
+│   └── pretrain/       # shared UKB self-supervised pretraining (DINO/MAE)
+├── deep_tso/           # Deep TSO run scripts (Domino): build/setup/run_* + tables/
+├── deep_scratch/       # Deep Scratch run scripts (run_scratch_mbav1, run_ablation, …)
+└── pretrain/           # UKB pretraining/preprocess scripts
+```
+
+> **Note on the examples below.** The tutorial snippets in this document use short
+> config names like `configs/scratch_baseline.yaml` for readability; the real paths are
+> now `configs/deep_scratch/scratch_baseline.yaml`, `configs/deep_tso/tso_dlrtc.yaml`,
+> etc. Per-table Deep TSO commands live in `deep_tso/tables/` (one script per paper table).
+
+---
+
 ## Components
 
 ### 1. Planner: Experiment Config (YAML)

@@ -18,7 +18,7 @@ Supported classifiers (set via ``model.architecture`` in the YAML):
 
 Usage:
     python3.11 training/train_classical.py \
-        --config experiments/configs/ablation/ablation_baseline_mahadevan2021.yaml
+        --config experiments/configs/deep_scratch/ablation/ablation_baseline_mahadevan2021.yaml
 """
 from __future__ import annotations
 

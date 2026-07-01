@@ -882,7 +882,7 @@ def main():
 
       * ``paper-ablation`` (default): builds the Deep Scratch ablation table
         (papers/deep_scratch tab:ablation_results) from the nine ablation
-        runs produced by ``experiments/run_ablation.sh``.
+        runs produced by ``experiments/deep_scratch/run_ablation.sh``.
       * ``paper-main``: builds the main-results table (baselines + ours).
       * ``legacy``: preserves the original dataset-sweep + per-patient
         analysis flow from before the paper-table rewrite.
@@ -921,7 +921,7 @@ def main():
 # Variant labels here match the row names in
 # papers/deep_scratch/deepscratch.tex Table 3 (tab:ablation_results).
 # The output-folder names (values) match the ``training.output`` field in
-# experiments/configs/ablation/ablation_*.yaml.
+# experiments/configs/deep_scratch/ablation/ablation_*.yaml.
 # ----------------------------------------------------------------------------
 
 ABLATION_VARIANTS = {

@@ -254,7 +254,10 @@ def print_comparison(rows):
             ("f1_tso", "f1_tso", 8), ("f1_macro", "f1_mac", 8),
             ("bal_acc", "bal_acc", 9), ("acc", "acc", 8),
             ("gt_model_iou", "gtIoU", 8), ("gt_model_f1", "gtF1", 7),
-            ("gt_model_onset_mae", "gtOnsMAE", 10)]
+            ("gt_model_onset_mae", "gtOnsMAE", 10),
+            # cross-cohort stability (C3/C3'): IoU mean +/- across noprod test subjects
+            ("gt_model_iou_subj_mean", "IoU_sMu", 9),
+            ("gt_model_iou_subj_std", "IoU_sSD", 9)]
     print("=" * 78)
     print("COMPARISON (per file; for LOFO/LOSO see FOLD AGGREGATES below)")
     print("=" * 78)

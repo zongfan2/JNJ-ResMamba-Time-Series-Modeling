@@ -10,7 +10,7 @@ import joblib
 
 shell_script = '''
 cd munge/predictive_modeling
-sudo python3.11 -m pip install -r requirements-tso.txt
+sudo python3.11 -m pip install -r requirement-tso.txt
 sudo python3.11 -m pip install -e .
 sudo python3.11 -m pip install optuna==4.3.0 seaborn ray TensorboardX torcheval ruptures mamba-ssm[causal-conv1d]==2.2.2
 '''

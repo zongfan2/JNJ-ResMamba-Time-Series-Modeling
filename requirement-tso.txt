@@ -1,0 +1,44 @@
+# Deep TSO dependencies (train_tso_patch_h5.py + convert_h5 + inspect + Mamba backbone).
+# Installed on Domino by experiments/deep_tso/deep_tso_setup.sh. Companion to
+# requirement-ml.txt (the broader/shared set); this is the TSO training/eval set.
+
+# Core ML and Data Processing
+numpy>=1.21.0,<2.0.0   # NumPy 2.x has breaking changes — pin to 1.x
+pandas>=1.3.0
+scikit-learn>=1.0.0    # f1_score, balanced_accuracy_score, StandardScaler
+scipy>=1.7.0           # signal processing (butter, filtfilt, stft)
+
+# Deep Learning Framework
+torch==2.1.0
+mamba-ssm[causal-conv1d]==2.2.2  # Core Mamba state-space backbone (MBA4TSO_Patch)
+
+# Configuration & I/O (REQUIRED by the trainer/convert pipeline)
+pyyaml>=6.0            # --config YAML loading (train_tso_patch_h5.py imports yaml)
+h5py>=3.7.0            # HDF5 segment stores (load_h5)
+pyarrow>=10.0.0,<18.0.0  # Parquet reads in convert_h5 (pin for NumPy 1.x)
+joblib>=1.1.0          # results_iter_*.joblib serialization (train + inspect)
+tqdm>=4.62.0           # progress bars
+
+# Visualization and Monitoring
+matplotlib>=3.5.0
+seaborn>=0.11.0        # results/analysis plots
+
+# Optimization and Hyperparameter Tuning (only for --tune runs)
+optuna==4.3.0
+
+# Distributed Training (only for the Ray path; not used by the cross-cohort tables)
+ray[train]==2.9.0
+ray[tune]==2.9.0
+
+# Image Processing (skimage.measure.block_reduce in legacy DL_helpers)
+scikit-image>=0.19.0
+
+# Additional metrics / changepoint (legacy DLRTC helpers)
+torcheval>=0.0.6
+ruptures>=1.1.7
+
+# Data Loading
+datasets>=2.0.0,<3.0.0  # HuggingFace datasets (future data pipeline)
+
+# Optional
+# tensorboard>=2.10.0  # training visualization
